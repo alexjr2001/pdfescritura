@@ -1,24 +1,35 @@
 import json
 import os
 import shutil
-import tempfile
+import hashlib
 import urllib.error
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from version import __version__
 
 
-GITHUB_OWNER = "TU_USUARIO"
-GITHUB_REPO = "TU_REPOSITORIO"
-GITHUB_ASSET_NAME = "GeneradorTestimonios.exe"
+GITHUB_OWNER = "alexjr2001"
+GITHUB_REPO = "pdfescritura"
+APP_ZIP_ASSET_NAME = "GeneradorTestimonios-win64.zip"
+CHECKSUMS_ASSET_NAME = "checksums.txt"
+APP_EXE_NAME = "GeneradorTestimonios.exe"
 
 
 @dataclass(frozen=True)
 class ReleaseInfo:
     version: str
-    asset_url: str
+    zip_asset_url: str
+    checksums_url: str
+
+
+@dataclass(frozen=True)
+class UpdateResult:
+    executable_path: Path | None
+    status: str
+    updated: bool
 
 
 def _version_tuple(version: str):
@@ -30,6 +41,37 @@ def _version_tuple(version: str):
         except ValueError:
             parts.append(0)
     return tuple(parts)
+
+
+def _repo_slug(repo: str) -> str:
+    repo = repo.strip().rstrip("/")
+    if repo.startswith("http://") or repo.startswith("https://"):
+        last = repo.split("/")[-1]
+        return last
+    return repo
+
+
+def _install_root() -> Path:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "GeneradorTestimonios"
+    return Path.home() / ".generador_testimonios"
+
+
+def _version_file() -> Path:
+    return _install_root() / "current_version.txt"
+
+
+def _executable_for_version(version: str) -> Path:
+    clean_version = version.strip().lstrip("vV") or "unknown"
+    return _install_root() / f"app-{clean_version}" / APP_EXE_NAME
+
+
+def _read_local_version() -> str:
+    version_file = _version_file()
+    if not version_file.exists():
+        return ""
+    return version_file.read_text(encoding="utf-8").strip()
 
 
 def _request_json(url: str):
@@ -48,7 +90,8 @@ def get_latest_release() -> ReleaseInfo | None:
     if GITHUB_OWNER == "TU_USUARIO" or GITHUB_REPO == "TU_REPOSITORIO":
         return None
 
-    url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+    repo_slug = _repo_slug(GITHUB_REPO)
+    url = f"https://api.github.com/repos/{GITHUB_OWNER}/{repo_slug}/releases/latest"
     try:
         data = _request_json(url)
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
@@ -56,15 +99,28 @@ def get_latest_release() -> ReleaseInfo | None:
 
     version = str(data.get("tag_name", "")).strip()
     assets = data.get("assets", [])
+    zip_asset_url = ""
+    checksums_url = ""
 
     for asset in assets:
-        if asset.get("name") == GITHUB_ASSET_NAME:
-            return ReleaseInfo(version=version, asset_url=asset.get("browser_download_url", ""))
+        name = asset.get("name")
+        if name == APP_ZIP_ASSET_NAME:
+            zip_asset_url = asset.get("browser_download_url", "")
+        elif name == CHECKSUMS_ASSET_NAME:
+            checksums_url = asset.get("browser_download_url", "")
+
+    if zip_asset_url:
+        return ReleaseInfo(
+            version=version,
+            zip_asset_url=zip_asset_url,
+            checksums_url=checksums_url,
+        )
 
     return None
 
 
-def has_new_version(local_version: str = __version__) -> bool:
+def has_new_version(local_version: str = "") -> bool:
+    local_version = local_version or _read_local_version() or __version__
     latest = get_latest_release()
     if latest is None:
         return False
@@ -72,16 +128,11 @@ def has_new_version(local_version: str = __version__) -> bool:
     return _version_tuple(latest.version) > _version_tuple(local_version)
 
 
-def download_latest_app(destination: Path) -> bool:
-    latest = get_latest_release()
-    if latest is None or not latest.asset_url:
-        return False
-
+def _download_to_file(url: str, destination: Path) -> bool:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp_destination = destination.with_suffix(destination.suffix + ".download")
-
     try:
-        with urllib.request.urlopen(latest.asset_url, timeout=60) as response, open(temp_destination, "wb") as output:
+        with urllib.request.urlopen(url, timeout=60) as response, open(temp_destination, "wb") as output:
             shutil.copyfileobj(response, output)
         os.replace(temp_destination, destination)
         return True
@@ -89,3 +140,123 @@ def download_latest_app(destination: Path) -> bool:
         if temp_destination.exists():
             temp_destination.unlink(missing_ok=True)
         return False
+
+
+def _parse_checksums(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "  " in line:
+            digest, filename = line.split("  ", 1)
+        else:
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            digest, filename = parts[0], parts[-1]
+        values[filename.strip()] = digest.strip().lower()
+    return values
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest().lower()
+
+
+def _install_release(latest: ReleaseInfo) -> UpdateResult:
+    install_root = _install_root()
+    install_root.mkdir(parents=True, exist_ok=True)
+
+    zip_path = install_root / APP_ZIP_ASSET_NAME
+    checksums_path = install_root / CHECKSUMS_ASSET_NAME
+
+    if not _download_to_file(latest.zip_asset_url, zip_path):
+        return UpdateResult(None, "No se pudo descargar el paquete de actualización.", False)
+
+    if latest.checksums_url:
+        if _download_to_file(latest.checksums_url, checksums_path):
+            checksums = _parse_checksums(checksums_path)
+            expected = checksums.get(APP_ZIP_ASSET_NAME)
+            if expected:
+                current = _sha256_file(zip_path)
+                if expected != current:
+                    return UpdateResult(None, "La verificación del paquete falló (SHA256 inválido).", False)
+
+    target_dir = _executable_for_version(latest.version).parent
+    temp_extract_dir = target_dir.with_name(target_dir.name + "-tmp")
+
+    if temp_extract_dir.exists():
+        shutil.rmtree(temp_extract_dir, ignore_errors=True)
+
+    temp_extract_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with zipfile.ZipFile(zip_path, "r") as archive:
+            archive.extractall(temp_extract_dir)
+    except zipfile.BadZipFile:
+        shutil.rmtree(temp_extract_dir, ignore_errors=True)
+        return UpdateResult(None, "El archivo ZIP de actualización está dañado.", False)
+
+    extracted_exe = temp_extract_dir / APP_EXE_NAME
+    if not extracted_exe.exists():
+        nested_match = list(temp_extract_dir.rglob(APP_EXE_NAME))
+        if not nested_match:
+            shutil.rmtree(temp_extract_dir, ignore_errors=True)
+            return UpdateResult(None, "El paquete no contiene el ejecutable esperado.", False)
+        extracted_exe = nested_match[0]
+
+    if target_dir.exists():
+        shutil.rmtree(target_dir, ignore_errors=True)
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    temp_extract_dir.replace(target_dir)
+
+    _version_file().write_text(latest.version.strip(), encoding="utf-8")
+    final_exe = target_dir / extracted_exe.relative_to(extracted_exe.parents[0])
+    # Si la estructura fue anidada, usa búsqueda directa para garantizar ruta válida.
+    if not final_exe.exists():
+        found = list(target_dir.rglob(APP_EXE_NAME))
+        if found:
+            final_exe = found[0]
+
+    return UpdateResult(final_exe if final_exe.exists() else None, "Actualización instalada.", True)
+
+
+def _get_local_executable() -> Path | None:
+    version = _read_local_version()
+    if version:
+        exe = _executable_for_version(version)
+        if exe.exists():
+            return exe
+
+    install_root = _install_root()
+    candidates = sorted(install_root.rglob(APP_EXE_NAME), key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else None
+
+
+def ensure_app_up_to_date() -> UpdateResult:
+    local_exe = _get_local_executable()
+    local_version = _read_local_version() or __version__
+    latest = get_latest_release()
+
+    if latest is None:
+        if local_exe and local_exe.exists():
+            return UpdateResult(local_exe, "Sin conexión o sin Release disponible. Se usa la versión local.", False)
+        return UpdateResult(None, "No hay versión local y no se pudo consultar GitHub Releases.", False)
+
+    needs_update = (not local_exe or not local_exe.exists()) or (
+        _version_tuple(latest.version) > _version_tuple(local_version)
+    )
+
+    if needs_update:
+        updated = _install_release(latest)
+        if updated.executable_path and updated.executable_path.exists():
+            return updated
+        if local_exe and local_exe.exists():
+            return UpdateResult(local_exe, updated.status, False)
+        return updated
+
+    return UpdateResult(local_exe, "Ya tienes la versión más reciente.", False)

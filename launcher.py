@@ -3,10 +3,7 @@ import sys
 from pathlib import Path
 from tkinter import Tk, messagebox
 
-from updater import download_latest_app, get_latest_release, has_new_version
-
-
-APP_EXE_NAME = "GeneradorTestimonios.exe"
+from updater import ensure_app_up_to_date
 
 
 def _base_dir():
@@ -23,26 +20,21 @@ def _mostrar_error(mensaje: str):
 
 
 def main():
-    base_dir = _base_dir()
-    app_path = base_dir / APP_EXE_NAME
+    _base_dir()  # Mantiene compatibilidad si se necesita ruta del ejecutable.
+    resultado = ensure_app_up_to_date()
+    app_path = resultado.executable_path
 
-    latest = get_latest_release()
-
-    if latest is not None and has_new_version():
-        if not download_latest_app(app_path):
-            _mostrar_error(
-                "No se pudo descargar la versión nueva desde GitHub.\n"
-                "Se intentará abrir la versión local si existe."
-            )
-
-    if not app_path.exists():
-        _mostrar_error(
-            f"No se encontró {APP_EXE_NAME} en la carpeta de instalación.\n"
-            "Vuelva a instalar o revise la descarga del Release."
-        )
+    if app_path is None or not app_path.exists():
+        _mostrar_error(resultado.status)
         return
 
-    subprocess.Popen([str(app_path)], cwd=str(base_dir))
+    if "fall" in resultado.status.lower() or "no se pudo" in resultado.status.lower():
+        root = Tk()
+        root.withdraw()
+        messagebox.showwarning("Generador de Testimonios", resultado.status)
+        root.destroy()
+
+    subprocess.Popen([str(app_path)], cwd=str(app_path.parent))
 
 
 if __name__ == "__main__":
