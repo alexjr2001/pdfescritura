@@ -1,2 +1,0 @@
-﻿10d7af02f4a4c8fda2b46ca4733ce6143eeefc020c81745d2039e147c097b577  GeneradorTestimonios-win64.zip
-c533c773323955eba540f90357c9dddd9133a7418394e9ca1ab010320e2a077b  GeneradorTestimoniosLauncher-win64.zip

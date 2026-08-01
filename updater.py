@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import hashlib
+import errno
 import urllib.error
 import urllib.request
 import zipfile
@@ -173,6 +174,11 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest().lower()
 
 
+def _is_access_denied_error(exc: OSError) -> bool:
+    winerror = getattr(exc, "winerror", None)
+    return winerror == 5 or exc.errno in {errno.EACCES, errno.EPERM}
+
+
 def _install_release(latest: ReleaseInfo) -> UpdateResult:
     install_root = _install_root()
     install_root.mkdir(parents=True, exist_ok=True)
@@ -228,10 +234,21 @@ def _install_release(latest: ReleaseInfo) -> UpdateResult:
             return UpdateResult(None, "El paquete no contiene el ejecutable esperado.", False)
         extracted_exe = nested_match[0]
 
-    if target_dir.exists():
-        shutil.rmtree(target_dir, ignore_errors=True)
-    target_dir.parent.mkdir(parents=True, exist_ok=True)
-    temp_extract_dir.replace(target_dir)
+    try:
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+        temp_extract_dir.replace(target_dir)
+    except OSError as exc:
+        shutil.rmtree(temp_extract_dir, ignore_errors=True)
+        if _is_access_denied_error(exc):
+            return UpdateResult(
+                None,
+                "No se pudo actualizar porque la aplicación está abierta o bloqueada. "
+                "Ciérrala y vuelve a intentar.",
+                False,
+            )
+        return UpdateResult(None, f"No se pudo instalar la actualización: {exc}", False)
 
     _version_file().write_text(latest.version.strip(), encoding="utf-8")
     final_exe = target_dir / extracted_exe.relative_to(extracted_exe.parents[0])
