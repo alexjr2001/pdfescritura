@@ -2,7 +2,7 @@ import tkinter as tk
 import re
 import os
 from datetime import date
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 from tkcalendar import DateEntry
@@ -32,6 +32,10 @@ class App:
         self.tipo_documento_var = tk.StringVar(value="ESCRITURA")
         self.notario = ""
         self.numero_documento = ""
+        self.boton_generar = None
+        self.loader_frame = None
+        self.loader_bar = None
+        self.loader_label = None
 
         self.crear_interfaz()
 
@@ -113,6 +117,53 @@ class App:
             height=36,
             command=self.agregar_firmante,
         ).pack(side="left")
+
+    def _set_generando(self, generando, texto="Generando documentos..."):
+        if generando:
+            if self.loader_frame is None:
+                self.loader_frame = ctk.CTkFrame(self.root, corner_radius=10)
+                self.loader_frame.pack(fill="x", padx=24, pady=(0, 12))
+
+                self.loader_label = ctk.CTkLabel(
+                    self.loader_frame,
+                    text=texto,
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                )
+                self.loader_label.pack(anchor="w", padx=14, pady=(10, 4))
+
+                self.loader_bar = ctk.CTkProgressBar(self.loader_frame, mode="determinate")
+                self.loader_bar.pack(fill="x", padx=14, pady=(0, 12))
+            else:
+                self.loader_label.configure(text=texto)
+                self.loader_frame.pack(fill="x", padx=24, pady=(0, 12))
+
+            if self.loader_bar is not None:
+                self.loader_bar.set(0.08)
+
+            if self.boton_generar is not None:
+                self.boton_generar.configure(state="disabled")
+
+            # Forzar repintado para que el loader se vea antes de procesar.
+            self.root.update_idletasks()
+            self.root.update()
+            return
+
+        if self.loader_frame is not None:
+            self.loader_frame.pack_forget()
+        if self.boton_generar is not None:
+            self.boton_generar.configure(state="normal")
+
+    def _actualizar_loader(self, progreso, texto=None):
+        if self.loader_bar is None:
+            return
+
+        if texto and self.loader_label is not None:
+            self.loader_label.configure(text=texto)
+
+        valor = max(0.0, min(1.0, float(progreso)))
+        self.loader_bar.set(valor)
+        self.root.update_idletasks()
+        self.root.update()
 
     def abrir(self):
 
@@ -288,13 +339,14 @@ class App:
         botones_frame = ctk.CTkFrame(bottom, fg_color="transparent")
         botones_frame.pack(fill="x", padx=16, pady=(16, 16))
 
-        ctk.CTkButton(
+        self.boton_generar = ctk.CTkButton(
             botones_frame,
             text="Generar testimonio y parte",
             height=42,
             font=ctk.CTkFont(size=13, weight="bold"),
             command=self.generar_testimonio_y_parte,
-        ).pack(side="left", fill="both", expand=True)
+        )
+        self.boton_generar.pack(side="left", fill="both", expand=True)
 
     def _actualizar_fecha_firmante(self, var_texto, calendario, indice):
         self._actualizar_fecha_texto(var_texto, calendario)
@@ -312,8 +364,99 @@ class App:
         del self.firmantes[indice]
         self._renderizar_firmantes()
 
+    def _pedir_nombre_firmante(self):
+        dialogo = ctk.CTkToplevel(self.root)
+        dialogo.title("Agregar firmante")
+        dialogo.geometry("480x300")
+        dialogo.minsize(480, 300)
+        dialogo.resizable(False, False)
+        dialogo.transient(self.root)
+        dialogo.grab_set()
+
+        resultado = {"nombre": None}
+
+        contenedor = ctk.CTkFrame(dialogo, corner_radius=16)
+        contenedor.pack(fill="both", expand=True, padx=18, pady=18)
+
+        ctk.CTkLabel(
+            contenedor,
+            text="Agregar firmante",
+            font=ctk.CTkFont(size=18, weight="bold"),
+        ).pack(anchor="w", padx=18, pady=(14, 4))
+
+        ctk.CTkLabel(
+            contenedor,
+            text="Escribe el nombre completo del firmante.",
+            font=ctk.CTkFont(size=12),
+            text_color="gray70",
+        ).pack(anchor="w", padx=18, pady=(0, 10))
+
+        entry = ctk.CTkEntry(
+            contenedor,
+            placeholder_text="Ej: Juan Pérez López",
+            height=38,
+        )
+        entry.pack(fill="x", padx=18)
+
+        mensaje_error = ctk.CTkLabel(
+            contenedor,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color="#ff8a80",
+        )
+        mensaje_error.pack(anchor="w", padx=18, pady=(6, 0))
+
+        botones = ctk.CTkFrame(contenedor, fg_color="transparent")
+        botones.pack(fill="x", padx=18, pady=(14, 14))
+
+        def cancelar():
+            resultado["nombre"] = None
+            dialogo.destroy()
+
+        def aceptar():
+            nombre = re.sub(r"\s+", " ", entry.get()).strip()
+            if not nombre:
+                mensaje_error.configure(text="Ingresa un nombre válido.")
+                entry.focus_set()
+                return
+
+            resultado["nombre"] = nombre
+            dialogo.destroy()
+
+        ctk.CTkButton(
+            botones,
+            text="Cancelar",
+            width=110,
+            height=36,
+            fg_color="#444444",
+            hover_color="#555555",
+            command=cancelar,
+        ).pack(side="right", padx=(8, 0))
+
+        ctk.CTkButton(
+            botones,
+            text="Agregar",
+            width=120,
+            height=36,
+            command=aceptar,
+        ).pack(side="right")
+
+        dialogo.protocol("WM_DELETE_WINDOW", cancelar)
+        dialogo.bind("<Return>", lambda event: aceptar())
+        dialogo.bind("<Escape>", lambda event: cancelar())
+
+        self.root.update_idletasks()
+        dialogo.geometry(f"480x300+{self.root.winfo_rootx() + 120}+{self.root.winfo_rooty() + 100}")
+        entry.focus_set()
+        dialogo.lift()
+        dialogo.attributes("-topmost", True)
+        dialogo.after(150, lambda: dialogo.attributes("-topmost", False))
+        self.root.wait_window(dialogo)
+
+        return resultado["nombre"]
+
     def agregar_firmante(self):
-        nombre = simpledialog.askstring("Agregar firmante", "Nombre del firmante:")
+        nombre = self._pedir_nombre_firmante()
         if not nombre:
             return
 
@@ -350,15 +493,33 @@ class App:
 
     def generar_testimonio_y_parte(self):
 
-        ruta_testimonio = self.generar(mostrar_mensaje=False)
-        if not ruta_testimonio:
-            return
+        self._set_generando(True)
+        self._actualizar_loader(0.12, "Preparando documento fuente...")
 
-        rutas_parte = self.generar_parte(mostrar_mensaje=False)
-        if not rutas_parte:
-            return
+        ruta_fuente, temporal_a_eliminar, pagina_eliminada = Generador.preparar_fuente_sin_primera_pagina_blanca(self.ruta.get())
+
+        try:
+            self._actualizar_loader(0.32, "Generando testimonio PDF...")
+            ruta_testimonio = self.generar(mostrar_mensaje=False, ruta_fuente=ruta_fuente)
+            if not ruta_testimonio:
+                return
+
+            self._actualizar_loader(0.68, "Generando parte Word/PDF...")
+            rutas_parte = self.generar_parte(mostrar_mensaje=False, ruta_fuente=ruta_fuente)
+            if not rutas_parte:
+                return
+
+            self._actualizar_loader(0.96, "Finalizando...")
+        finally:
+            if temporal_a_eliminar and os.path.exists(temporal_a_eliminar):
+                os.remove(temporal_a_eliminar)
+            self._set_generando(False)
 
         ruta_word_parte, ruta_pdf_parte = rutas_parte
+
+        aviso_pagina = ""
+        if pagina_eliminada:
+            aviso_pagina = "\n\nAviso: se detectó y eliminó una primera página en blanco del Word fuente."
 
         messagebox.showinfo(
             "Éxito",
@@ -366,9 +527,10 @@ class App:
             f"- Testimonio PDF: {ruta_testimonio}\n"
             f"- Parte Word: {ruta_word_parte}\n"
             f"- Parte PDF: {ruta_pdf_parte}"
+            f"{aviso_pagina}"
         )
 
-    def generar(self, mostrar_mensaje=True):
+    def generar(self, mostrar_mensaje=True, ruta_fuente=None):
 
         if not self.ruta.get():
 
@@ -386,7 +548,13 @@ class App:
             )
             return None
 
-        g = Generador(self.ruta.get())
+        ruta_origen = ruta_fuente
+        temporal_a_eliminar = None
+        if ruta_origen is None:
+            ruta_origen, temporal_a_eliminar, _ = Generador.preparar_fuente_sin_primera_pagina_blanca(self.ruta.get())
+
+        g = Generador(ruta_origen)
+        g.establecer_titulo_encabezado("TESTIMONIO")
 
         texto_firmas = ""
         es_acta = self.tipo_documento_var.get() == "ACTA VEHICULAR"
@@ -515,28 +683,32 @@ class App:
         nombre_pdf = f"{prefijo} {numero_documento}.pdf"
 
         try:
-            os.makedirs(carpeta_destino, exist_ok=True)
-            ruta_salida = os.path.join(carpeta_destino, nombre_pdf)
-            g.guardar(ruta_salida)
-            if mostrar_mensaje:
-                messagebox.showinfo(
-                    "Éxito",
-                    f"PDF generado correctamente en:\n{ruta_salida}"
-                )
-        except OSError:
-            ruta_salida = nombre_pdf
-            g.guardar(ruta_salida)
-            if mostrar_mensaje:
-                messagebox.showwarning(
-                    "Aviso",
-                    "No se pudo usar la ruta en Z:. Se guardó en la carpeta actual:\n"
-                    f"{os.path.abspath(ruta_salida)}"
-                )
-            ruta_salida = os.path.abspath(ruta_salida)
+            try:
+                os.makedirs(carpeta_destino, exist_ok=True)
+                ruta_salida = os.path.join(carpeta_destino, nombre_pdf)
+                g.guardar(ruta_salida)
+                if mostrar_mensaje:
+                    messagebox.showinfo(
+                        "Éxito",
+                        f"PDF generado correctamente en:\n{ruta_salida}"
+                    )
+            except OSError:
+                ruta_salida = nombre_pdf
+                g.guardar(ruta_salida)
+                if mostrar_mensaje:
+                    messagebox.showwarning(
+                        "Aviso",
+                        "No se pudo usar la ruta en Z:. Se guardó en la carpeta actual:\n"
+                        f"{os.path.abspath(ruta_salida)}"
+                    )
+                ruta_salida = os.path.abspath(ruta_salida)
+        finally:
+            if temporal_a_eliminar and os.path.exists(temporal_a_eliminar):
+                os.remove(temporal_a_eliminar)
 
         return ruta_salida
 
-    def generar_parte(self, mostrar_mensaje=True):
+    def generar_parte(self, mostrar_mensaje=True, ruta_fuente=None):
 
         if not self.ruta.get():
             messagebox.showerror("Error", "Seleccione un documento.")
@@ -549,7 +721,12 @@ class App:
             )
             return None
 
-        g = Generador(self.ruta.get())
+        ruta_origen = ruta_fuente
+        temporal_a_eliminar = None
+        if ruta_origen is None:
+            ruta_origen, temporal_a_eliminar, _ = Generador.preparar_fuente_sin_primera_pagina_blanca(self.ruta.get())
+
+        g = Generador(ruta_origen)
         es_acta = self.tipo_documento_var.get() == "ACTA VEHICULAR"
         if es_acta:
             g.configurar_acta_vehicular()
@@ -684,31 +861,35 @@ class App:
             nombre_parte += " - PARTE"
 
         try:
-            os.makedirs(carpeta_destino, exist_ok=True)
-            
-            # Guardar como Word
-            ruta_word = os.path.join(carpeta_destino, f"{nombre_parte}.docx")
-            g.guardar(ruta_word)
-            
-            # Guardar como PDF
-            ruta_pdf = os.path.join(carpeta_destino, f"{nombre_parte}.pdf")
-            g.guardar(ruta_pdf)
-            if mostrar_mensaje:
-                messagebox.showinfo(
-                    "Éxito",
-                    f"PARTE generado correctamente en:\n{carpeta_destino}"
-                )
-        except OSError:
-            ruta_word = f"{nombre_parte}.docx"
-            ruta_pdf = f"{nombre_parte}.pdf"
-            g.guardar(ruta_word)
-            g.guardar(ruta_pdf)
-            ruta_word = os.path.abspath(ruta_word)
-            ruta_pdf = os.path.abspath(ruta_pdf)
-            if mostrar_mensaje:
-                messagebox.showwarning(
-                    "Aviso",
-                    f"Se guardó en la carpeta actual:\n{os.path.abspath(carpeta_destino)}"
-                )
+            try:
+                os.makedirs(carpeta_destino, exist_ok=True)
+
+                # Guardar como Word
+                ruta_word = os.path.join(carpeta_destino, f"{nombre_parte}.docx")
+                g.guardar(ruta_word)
+
+                # Guardar como PDF
+                ruta_pdf = os.path.join(carpeta_destino, f"{nombre_parte}.pdf")
+                g.guardar(ruta_pdf)
+                if mostrar_mensaje:
+                    messagebox.showinfo(
+                        "Éxito",
+                        f"PARTE generado correctamente en:\n{carpeta_destino}"
+                    )
+            except OSError:
+                ruta_word = f"{nombre_parte}.docx"
+                ruta_pdf = f"{nombre_parte}.pdf"
+                g.guardar(ruta_word)
+                g.guardar(ruta_pdf)
+                ruta_word = os.path.abspath(ruta_word)
+                ruta_pdf = os.path.abspath(ruta_pdf)
+                if mostrar_mensaje:
+                    messagebox.showwarning(
+                        "Aviso",
+                        f"Se guardó en la carpeta actual:\n{os.path.abspath(carpeta_destino)}"
+                    )
+        finally:
+            if temporal_a_eliminar and os.path.exists(temporal_a_eliminar):
+                os.remove(temporal_a_eliminar)
 
         return ruta_word, ruta_pdf

@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 import sys
 from io import BytesIO
@@ -24,8 +25,21 @@ class Generador:
     # Constantes de la API de Word (win32com) usadas para el relleno con "=".
     WD_COLLAPSE_END = 0
     WD_CHARACTER = 1
+    WD_GO_TO_PAGE = 1
+    WD_GO_TO_ABSOLUTE = 1
+    WD_TEXT_ORIENTATION_HORIZONTAL = 1
+    WD_HEADER_FOOTER_FIRST_PAGE = 2
+    WD_HEADER_FOOTER_PRIMARY = 1
+    WD_RELATIVE_HORIZONTAL_POSITION_PAGE = 1
+    WD_RELATIVE_VERTICAL_POSITION_PAGE = 1
+    WD_WRAP_NONE = 3
     WD_FIRST_CHARACTER_LINE_NUMBER = 10
+    WD_STATISTIC_PAGES = 2
     WD_STATISTIC_LINES = 1
+    MSO_TEXT_EFFECT_1 = 1
+    MSO_FALSE = 0
+    MSO_TRUE = -1
+    MSO_SEND_BEHIND_TEXT = 5
     TEXTO_FOOTER = (
         "Se emite el presente testimonio de conformidad con lo regulado por los artículos 24° y 28° del Decreto "
         "Legislativo N° 1049 - Decreto Legislativo del Notariado, en concordancia con lo regulado por la ley de "
@@ -41,10 +55,160 @@ class Generador:
         self._margen_inferior_minimo_cm = None
         self._margen_superior_minimo_cm = 1.0
         self._ancho_extra_cm = 0.0
+        self._titulo_encabezado = ""
         # Tuplas (indice_parrafo, caracter) de los párrafos que deben
         # rellenarse hasta el margen derecho. El relleno real se hace más
         # adelante, con Word abierto, para usar su medición exacta.
         self._indices_pendientes_iguales = []
+
+    def establecer_titulo_encabezado(self, titulo):
+        self._titulo_encabezado = (titulo or "").strip()
+
+    def _aplicar_marca_agua_en_word(self, documento):
+        if not self._titulo_encabezado:
+            return
+
+        texto = self._titulo_encabezado.upper()
+
+        if documento.Sections.Count < 1:
+            return
+
+        seccion = documento.Sections(1)
+        seccion.PageSetup.DifferentFirstPageHeaderFooter = self.MSO_TRUE
+        encabezado = seccion.Headers(self.WD_HEADER_FOOTER_FIRST_PAGE)
+
+        # Evita duplicar la marca de agua al guardar varias veces.
+        for i in range(encabezado.Shapes.Count, 0, -1):
+            forma = encabezado.Shapes.Item(i)
+            if forma.Name == "MarcaAguaTestimonio":
+                forma.Delete()
+
+        marca = encabezado.Shapes.AddTextbox(
+            self.WD_TEXT_ORIENTATION_HORIZONTAL,
+            0,
+            0,
+            180,
+            34,
+            encabezado.Range,
+        )
+
+        marca.Name = "MarcaAguaTestimonio"
+        texto_marca = marca.TextFrame.TextRange
+        texto_marca.Text = texto
+        texto_marca.Font.Name = "Calibri"
+        texto_marca.Font.Size = 21
+        texto_marca.Font.Bold = self.MSO_TRUE
+        texto_marca.Font.Color = 8421504  # Gris plomo (RGB 128,128,128)
+        marca.TextFrame.MarginLeft = 0
+        marca.TextFrame.MarginRight = 0
+        marca.TextFrame.MarginTop = 0
+        marca.TextFrame.MarginBottom = 0
+        marca.Line.Visible = self.MSO_FALSE
+        marca.Fill.Visible = self.MSO_FALSE
+        marca.Rotation = 0.0
+        marca.LockAspectRatio = self.MSO_TRUE
+        marca.WrapFormat.Type = self.WD_WRAP_NONE
+        marca.RelativeHorizontalPosition = self.WD_RELATIVE_HORIZONTAL_POSITION_PAGE
+        marca.RelativeVerticalPosition = self.WD_RELATIVE_VERTICAL_POSITION_PAGE
+        marca.Top = 18
+
+        ancho_pagina = seccion.PageSetup.PageWidth
+        separacion_derecha = 8
+        marca.Left = ancho_pagina - marca.Width - separacion_derecha
+
+        marca.ZOrder(self.MSO_SEND_BEHIND_TEXT)
+
+    @classmethod
+    def _eliminar_primera_pagina_en_blanco_word(cls, documento):
+        """Elimina la primera página si está vacía (sin texto, tablas ni figuras)."""
+
+        total_paginas = documento.ComputeStatistics(cls.WD_STATISTIC_PAGES)
+        if total_paginas <= 1:
+            return False
+
+        inicio_p1 = documento.GoTo(
+            What=cls.WD_GO_TO_PAGE,
+            Which=cls.WD_GO_TO_ABSOLUTE,
+            Count=1,
+        ).Start
+        inicio_p2 = documento.GoTo(
+            What=cls.WD_GO_TO_PAGE,
+            Which=cls.WD_GO_TO_ABSOLUTE,
+            Count=2,
+        ).Start
+
+        if inicio_p2 <= inicio_p1:
+            return False
+
+        rango_p1 = documento.Range(Start=inicio_p1, End=inicio_p2)
+        texto_visible = (
+            rango_p1.Text
+            .replace("\r", "")
+            .replace("\x0c", "")
+            .replace("\x07", "")
+            .strip()
+        )
+
+        if texto_visible:
+            return False
+
+        if rango_p1.Tables.Count > 0 or rango_p1.InlineShapes.Count > 0:
+            return False
+
+        try:
+            if rango_p1.ShapeRange.Count > 0:
+                return False
+        except Exception:
+            # ShapeRange lanza excepción cuando no hay formas flotantes.
+            pass
+
+        rango_p1.Delete()
+        return True
+
+    @classmethod
+    def preparar_fuente_sin_primera_pagina_blanca(cls, ruta):
+        """Crea una copia temporal del DOCX sin primera página en blanco.
+
+        Retorna una tupla:
+        (ruta_a_usar, ruta_temporal_a_eliminar_o_none, pagina_eliminada).
+        """
+
+        ruta_absoluta = os.path.abspath(ruta)
+
+        archivo_temp = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+        ruta_temporal = archivo_temp.name
+        archivo_temp.close()
+
+        try:
+            shutil.copy2(ruta_absoluta, ruta_temporal)
+        except OSError:
+            if os.path.exists(ruta_temporal):
+                os.remove(ruta_temporal)
+            return ruta_absoluta, None, False
+
+        word = None
+        documento = None
+
+        try:
+            word = win32com.client.Dispatch("Word.Application")
+            word.Visible = False
+            word.DisplayAlerts = 0
+
+            documento = word.Documents.Open(os.path.abspath(ruta_temporal), ReadOnly=False)
+            pagina_eliminada = cls._eliminar_primera_pagina_en_blanco_word(documento)
+            if pagina_eliminada:
+                documento.Save()
+
+            return ruta_temporal, ruta_temporal, pagina_eliminada
+        except Exception:
+            if os.path.exists(ruta_temporal):
+                os.remove(ruta_temporal)
+            return ruta_absoluta, None, False
+        finally:
+            if documento is not None:
+                documento.Close(False)
+            if word is not None:
+                word.Quit()
 
     def _base_recursos(self):
         return getattr(sys, "_MEIPASS", os.path.dirname(__file__))
@@ -471,6 +635,7 @@ class Generador:
                 try:
                     documento = word.Documents.Open(os.path.abspath(ruta_docx))
                     try:
+                        self._aplicar_marca_agua_en_word(documento)
                         self._rellenar_iguales_en_documento_word(documento)
 
                         formato = (

@@ -144,7 +144,7 @@ def _download_to_file(url: str, destination: Path) -> bool:
 
 def _parse_checksums(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
         line = raw_line.strip()
         if not line:
             continue
@@ -155,7 +155,13 @@ def _parse_checksums(path: Path) -> dict[str, str]:
             if len(parts) < 2:
                 continue
             digest, filename = parts[0], parts[-1]
-        values[filename.strip()] = digest.strip().lower()
+
+        digest = digest.strip().lower()
+        filename = filename.strip().lstrip("*").replace("\\", "/")
+        basename = Path(filename).name
+
+        values[filename] = digest
+        values[basename] = digest
     return values
 
 
@@ -181,10 +187,23 @@ def _install_release(latest: ReleaseInfo) -> UpdateResult:
         if _download_to_file(latest.checksums_url, checksums_path):
             checksums = _parse_checksums(checksums_path)
             expected = checksums.get(APP_ZIP_ASSET_NAME)
-            if expected:
-                current = _sha256_file(zip_path)
-                if expected != current:
-                    return UpdateResult(None, "La verificación del paquete falló (SHA256 inválido).", False)
+            if not expected:
+                return UpdateResult(
+                    None,
+                    f"El archivo {CHECKSUMS_ASSET_NAME} no contiene una entrada para {APP_ZIP_ASSET_NAME}.",
+                    False,
+                )
+
+            current = _sha256_file(zip_path)
+            if expected != current:
+                return UpdateResult(
+                    None,
+                    (
+                        "La verificación del paquete falló (SHA256 inválido). "
+                        f"Esperado: {expected[:12]}..., Actual: {current[:12]}..."
+                    ),
+                    False,
+                )
 
     target_dir = _executable_for_version(latest.version).parent
     temp_extract_dir = target_dir.with_name(target_dir.name + "-tmp")
