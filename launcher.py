@@ -21,12 +21,7 @@ def _mostrar_error(mensaje: str):
 
 def main():
     _base_dir()  # Mantiene compatibilidad si se necesita ruta del ejecutable.
-    try:
-        resultado = ensure_app_up_to_date()
-    except Exception as exc:
-        _mostrar_error(f"Error al buscar/instalar actualización: {exc}")
-        return
-
+    resultado = ensure_app_up_to_date()
     app_path = resultado.executable_path
 
     if app_path is None or not app_path.exists():

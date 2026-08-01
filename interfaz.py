@@ -20,7 +20,7 @@ class App:
     def __init__(self):
 
         self.root = ctk.CTk()
-        self.root.title("Generador de Testimonios")
+        self.root.title("Generador de Testimonios y Partes")
         self.root.geometry("720x750")
 
         self.personas = []
@@ -46,7 +46,7 @@ class App:
         # ── Cabecera ──────────────────────────────────────────────
         ctk.CTkLabel(
             self.root,
-            text="Generador de Testimonios",
+            text="Generador de Testimonios y Partes",
             font=ctk.CTkFont(size=18, weight="bold"),
         ).pack(pady=(18, 4))
 
