@@ -676,7 +676,7 @@ class App:
         )
 
         fecha_generacion = date.today().strftime("%Y-%m-%d")
-        carpeta_base = r"C:\DOC BORIS VILCA\TESTIMONIOS"
+        carpeta_base = r"Z:\DOC BORIS VILCA\TESTIMONIOS Y PARTES"
         carpeta_destino = os.path.join(carpeta_base, fecha_generacion)
         numero_documento = self.numero_documento.strip() or "SIN_NUMERO"
         prefijo = "AV" if es_acta else "EP"
@@ -852,7 +852,7 @@ class App:
         )
 
         fecha_generacion = date.today().strftime("%Y-%m-%d")
-        carpeta_base = r"C:\DOC BORIS VILCA\TESTIMONIOS"
+        carpeta_base = r"Z:\DOC BORIS VILCA\TESTIMONIOS Y PARTES"
         carpeta_destino = os.path.join(carpeta_base, fecha_generacion)
         numero_documento = self.numero_documento.strip() or "SIN_NUMERO"
         tipo_nombre = "Acta" if es_acta else "Parte"
