@@ -10,6 +10,7 @@ from tkcalendar import DateEntry
 from extractor import Escritura
 from generador import Generador
 from utils import fecha_a_texto_interfaz, fecha_a_texto_notarial, validar_fechas_no_futuras
+from version import __version__
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -20,7 +21,7 @@ class App:
     def __init__(self):
 
         self.root = ctk.CTk()
-        self.root.title("Generador de Testimonios y Partes")
+        self.root.title(f"Generador de Testimonios y Partes v{__version__}")
         self.root.geometry("720x750")
 
         self.personas = []
@@ -563,12 +564,22 @@ class App:
 
         try:
             self._actualizar_loader(0.32, "Generando testimonio PDF...")
-            ruta_testimonio = self.generar(mostrar_mensaje=False, ruta_fuente=ruta_fuente)
+            try:
+                ruta_testimonio = self.generar(mostrar_mensaje=False, ruta_fuente=ruta_fuente)
+            except Exception as e:
+                messagebox.showerror("Error al generar testimonio",
+                    f"No se pudo generar el testimonio PDF.\n\nDetalle: {e}\n\nIntenta apretar el botón generar de nuevo.")
+                return
             if not ruta_testimonio:
                 return
 
             self._actualizar_loader(0.68, "Generando parte Word/PDF...")
-            rutas_parte = self.generar_parte(mostrar_mensaje=False, ruta_fuente=ruta_fuente)
+            try:
+                rutas_parte = self.generar_parte(mostrar_mensaje=False, ruta_fuente=ruta_fuente)
+            except Exception as e:
+                messagebox.showerror("Error al generar parte",
+                    f"No se pudo generar el parte Word/PDF.\n\nDetalle: {e}\n\nIntenta apretar el botón generar de nuevo.")
+                return
             if not rutas_parte:
                 return
 
@@ -749,21 +760,26 @@ class App:
             try:
                 os.makedirs(carpeta_destino, exist_ok=True)
                 ruta_salida = os.path.join(carpeta_destino, nombre_pdf)
-                g.guardar(ruta_salida)
+                try:
+                    g.guardar(ruta_salida)
+                except Exception as e:
+                    messagebox.showerror("Error al guardar testimonio",
+                        f"No se pudo guardar el testimonio PDF.\n\nDetalle: {e}\n\nIntenta apretar el botón generar de nuevo.")
+                    return None
                 if mostrar_mensaje:
-                    messagebox.showinfo(
-                        "Éxito",
-                        f"PDF generado correctamente en:\n{ruta_salida}"
-                    )
+                    messagebox.showinfo("Éxito", f"PDF generado correctamente en:\n{ruta_salida}")
             except OSError:
                 ruta_salida = nombre_pdf
-                g.guardar(ruta_salida)
+                try:
+                    g.guardar(ruta_salida)
+                except Exception as e:
+                    messagebox.showerror("Error al guardar testimonio",
+                        f"No se pudo guardar el testimonio PDF.\n\nDetalle: {e}\n\nIntenta apretar el botón generar de nuevo.")
+                    return None
                 if mostrar_mensaje:
-                    messagebox.showwarning(
-                        "Aviso",
+                    messagebox.showwarning("Aviso",
                         "No se pudo usar la ruta en Z:. Se guardó en la carpeta actual:\n"
-                        f"{os.path.abspath(ruta_salida)}"
-                    )
+                        f"{os.path.abspath(ruta_salida)}")
                 ruta_salida = os.path.abspath(ruta_salida)
         finally:
             if temporal_a_eliminar and os.path.exists(temporal_a_eliminar):
@@ -929,28 +945,43 @@ class App:
 
                 # Guardar como Word
                 ruta_word = os.path.join(carpeta_destino, f"{nombre_parte}.docx")
-                g.guardar(ruta_word)
+                try:
+                    g.guardar(ruta_word)
+                except Exception as e:
+                    messagebox.showerror("Error al guardar parte Word",
+                        f"No se pudo guardar el parte como Word.\n\nDetalle: {e}\n\nIntenta apretar el botón generar de nuevo.")
+                    return None
 
                 # Guardar como PDF
                 ruta_pdf = os.path.join(carpeta_destino, f"{nombre_parte}.pdf")
-                g.guardar(ruta_pdf)
+                try:
+                    g.guardar(ruta_pdf)
+                except Exception as e:
+                    messagebox.showerror("Error al guardar parte PDF",
+                        f"No se pudo guardar el parte como PDF.\n\nDetalle: {e}\n\nIntenta apretar el botón generar de nuevo.")
+                    return None
+
                 if mostrar_mensaje:
-                    messagebox.showinfo(
-                        "Éxito",
-                        f"PARTE generado correctamente en:\n{carpeta_destino}"
-                    )
+                    messagebox.showinfo("Éxito", f"PARTE generado correctamente en:\n{carpeta_destino}")
             except OSError:
                 ruta_word = f"{nombre_parte}.docx"
                 ruta_pdf = f"{nombre_parte}.pdf"
-                g.guardar(ruta_word)
-                g.guardar(ruta_pdf)
+                try:
+                    g.guardar(ruta_word)
+                except Exception as e:
+                    messagebox.showerror("Error al guardar parte Word",
+                        f"No se pudo guardar el parte como Word.\n\nDetalle: {e}\n\nIntenta apretar el botón generar de nuevo.")
+                    return None
+                try:
+                    g.guardar(ruta_pdf)
+                except Exception as e:
+                    messagebox.showerror("Error al guardar parte PDF",
+                        f"No se pudo guardar el parte como PDF.\n\nDetalle: {e}\n\nIntenta apretar el botón generar de nuevo.")
+                    return None
                 ruta_word = os.path.abspath(ruta_word)
                 ruta_pdf = os.path.abspath(ruta_pdf)
                 if mostrar_mensaje:
-                    messagebox.showwarning(
-                        "Aviso",
-                        f"Se guardó en la carpeta actual:\n{os.path.abspath(carpeta_destino)}"
-                    )
+                    messagebox.showwarning("Aviso", f"Se guardó en la carpeta actual:\n{os.path.abspath(carpeta_destino)}")
         finally:
             if temporal_a_eliminar and os.path.exists(temporal_a_eliminar):
                 os.remove(temporal_a_eliminar)

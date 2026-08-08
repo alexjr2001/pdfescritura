@@ -278,13 +278,22 @@ class Generador:
 
         word = None
         documento = None
+        word_propio = False
 
         try:
-            word = win32com.client.DispatchEx("Word.Application")
-            word.Visible = False
-            word.DisplayAlerts = 0
+            try:
+                word = win32com.client.GetActiveObject("Word.Application")
+            except Exception:
+                word = win32com.client.Dispatch("Word.Application")
+                word.Visible = False
+                word.DisplayAlerts = 0
+                word_propio = True
 
-            documento = word.Documents.Open(os.path.abspath(ruta_temporal), ReadOnly=False)
+            # El 12° argumento posicional de Documents.Open es Visible=False.
+            documento = word.Documents.Open(
+                os.path.abspath(ruta_temporal),
+                False, False, False, '', '', False, '', '', 0, 0, False
+            )
             pagina_eliminada = cls._eliminar_primera_pagina_en_blanco_word(documento)
             if pagina_eliminada:
                 documento.Save()
@@ -297,7 +306,7 @@ class Generador:
         finally:
             if documento is not None:
                 documento.Close(False)
-            if word is not None:
+            if word is not None and word_propio:
                 word.Quit()
 
     def _base_recursos(self):
@@ -852,12 +861,20 @@ class Generador:
                 ruta_docx = os.path.join(temp_dir, "testimonio.docx")
                 self.doc.save(ruta_docx)
 
-                word = win32com.client.DispatchEx("Word.Application")
-                word.Visible = False
+                word_propio = False
+                try:
+                    word = win32com.client.GetActiveObject("Word.Application")
+                except Exception:
+                    word = win32com.client.Dispatch("Word.Application")
+                    word.Visible = False
+                    word_propio = True
 
                 try:
-
-                    documento = word.Documents.Open(os.path.abspath(ruta_docx))
+                    # El 12° argumento posicional de Documents.Open es Visible=False.
+                    documento = word.Documents.Open(
+                        os.path.abspath(ruta_docx),
+                        False, False, False, '', '', False, '', '', 0, 0, False
+                    )
                     try:
                         self._aplicar_marca_agua_en_word(documento)
                         self._rellenar_iguales_en_documento_word(documento)
@@ -872,7 +889,8 @@ class Generador:
                     finally:
                         documento.Close(False)
                 finally:
-                    word.Quit()
+                    if word_propio:
+                        word.Quit()
 
             if extension == ".pdf":
                 self._estampar_firma_en_pdf(os.path.abspath(ruta))
