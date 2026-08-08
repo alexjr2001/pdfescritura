@@ -280,7 +280,7 @@ class Generador:
         documento = None
 
         try:
-            word = win32com.client.Dispatch("Word.Application")
+            word = win32com.client.DispatchEx("Word.Application")
             word.Visible = False
             word.DisplayAlerts = 0
 
@@ -852,10 +852,11 @@ class Generador:
                 ruta_docx = os.path.join(temp_dir, "testimonio.docx")
                 self.doc.save(ruta_docx)
 
-                word = win32com.client.Dispatch("Word.Application")
+                word = win32com.client.DispatchEx("Word.Application")
                 word.Visible = False
 
                 try:
+
                     documento = word.Documents.Open(os.path.abspath(ruta_docx))
                     try:
                         self._aplicar_marca_agua_en_word(documento)
