@@ -5,9 +5,17 @@ Set-Location $projectRoot
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $pyinstaller = Join-Path $projectRoot '.venv\Scripts\pyinstaller.exe'
+$venvPython = Join-Path $projectRoot '.venv\Scripts\python.exe'
 if (-not (Test-Path $pyinstaller)) {
     throw 'No se encontro PyInstaller en .venv. Instale dependencias antes de compilar.'
 }
+
+if (-not (Test-Path $venvPython)) {
+    throw 'No se encontro Python en .venv. Cree el entorno virtual antes de compilar.'
+}
+
+# Asegura bundle de certificados para TLS en updater/launcher.
+& $venvPython -m pip install --disable-pip-version-check --quiet certifi
 
 $distDir = Join-Path $projectRoot 'dist'
 $releaseDir = Join-Path $distDir 'release'

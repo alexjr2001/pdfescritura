@@ -41,6 +41,32 @@ class App:
 
         self.root.mainloop()
 
+    def _normalizar_nombre_firmante(self, nombre):
+        return re.sub(r"\s+", " ", (nombre or "")).strip().upper()
+
+    def _mover_firmante(self, indice, delta):
+        nuevo_indice = indice + delta
+        if not (0 <= indice < len(self.firmantes)):
+            return
+        if not (0 <= nuevo_indice < len(self.firmantes)):
+            return
+
+        firmante = self.firmantes.pop(indice)
+        self.firmantes.insert(nuevo_indice, firmante)
+        self._renderizar_firmantes()
+
+    def _editar_firmante(self, indice):
+        if not (0 <= indice < len(self.firmantes)):
+            return
+
+        nombre_actual = self.firmantes[indice]["nombre"]
+        nuevo_nombre = self._pedir_nombre_firmante(nombre_inicial=nombre_actual, titulo="Editar firmante")
+        if not nuevo_nombre:
+            return
+
+        self.firmantes[indice]["nombre"] = self._normalizar_nombre_firmante(nuevo_nombre)
+        self._renderizar_firmantes()
+
     def crear_interfaz(self):
 
         # ── Cabecera ──────────────────────────────────────────────
@@ -192,7 +218,7 @@ class App:
         fecha_base = doc.extraer_fecha_escritura() or date.today()
         self.fecha_base_documento = fecha_base
         self.firmantes = [
-            {"nombre": persona, "fecha": fecha_base}
+            {"nombre": self._normalizar_nombre_firmante(persona), "fecha": fecha_base}
             for persona in self.personas
         ]
         self._renderizar_firmantes()
@@ -207,6 +233,8 @@ class App:
         self.personas = [firmante["nombre"] for firmante in self.firmantes]
 
         for indice, firmante in enumerate(self.firmantes):
+            puede_subir = indice > 0
+            puede_bajar = indice < (len(self.firmantes) - 1)
 
             card = ctk.CTkFrame(self.frame_personas, corner_radius=10)
             card.pack(fill="x", padx=8, pady=(8, 0))
@@ -229,7 +257,39 @@ class App:
                 fg_color="#7a2e2e",
                 hover_color="#9a3a3a",
                 command=lambda i=indice: self._eliminar_firmante(i),
-            ).pack(side="right")
+            ).pack(side="right", padx=(8, 0))
+
+            ctk.CTkButton(
+                cabecera,
+                text="↓",
+                width=36,
+                height=28,
+                fg_color="#555555",
+                hover_color="#666666",
+                state=("normal" if puede_bajar else "disabled"),
+                command=lambda i=indice: self._mover_firmante(i, 1),
+            ).pack(side="right", padx=(8, 0))
+
+            ctk.CTkButton(
+                cabecera,
+                text="↑",
+                width=36,
+                height=28,
+                fg_color="#555555",
+                hover_color="#666666",
+                state=("normal" if puede_subir else "disabled"),
+                command=lambda i=indice: self._mover_firmante(i, -1),
+            ).pack(side="right", padx=(8, 0))
+
+            ctk.CTkButton(
+                cabecera,
+                text="✎",
+                width=36,
+                height=28,
+                fg_color="#2f5f8f",
+                hover_color="#3b74ac",
+                command=lambda i=indice: self._editar_firmante(i),
+            ).pack(side="right", padx=(8, 0))
 
             ctk.CTkLabel(
                 card,
@@ -364,9 +424,9 @@ class App:
         del self.firmantes[indice]
         self._renderizar_firmantes()
 
-    def _pedir_nombre_firmante(self):
+    def _pedir_nombre_firmante(self, nombre_inicial="", titulo="Agregar firmante"):
         dialogo = ctk.CTkToplevel(self.root)
-        dialogo.title("Agregar firmante")
+        dialogo.title(titulo)
         dialogo.geometry("480x300")
         dialogo.minsize(480, 300)
         dialogo.resizable(False, False)
@@ -380,7 +440,7 @@ class App:
 
         ctk.CTkLabel(
             contenedor,
-            text="Agregar firmante",
+            text=titulo,
             font=ctk.CTkFont(size=18, weight="bold"),
         ).pack(anchor="w", padx=18, pady=(14, 4))
 
@@ -397,6 +457,9 @@ class App:
             height=38,
         )
         entry.pack(fill="x", padx=18)
+        if nombre_inicial:
+            entry.insert(0, nombre_inicial)
+            entry.select_range(0, "end")
 
         mensaje_error = ctk.CTkLabel(
             contenedor,
@@ -414,7 +477,7 @@ class App:
             dialogo.destroy()
 
         def aceptar():
-            nombre = re.sub(r"\s+", " ", entry.get()).strip()
+            nombre = self._normalizar_nombre_firmante(entry.get())
             if not nombre:
                 mensaje_error.configure(text="Ingresa un nombre válido.")
                 entry.focus_set()
@@ -460,7 +523,7 @@ class App:
         if not nombre:
             return
 
-        nombre = re.sub(r"\s+", " ", nombre).strip()
+        nombre = self._normalizar_nombre_firmante(nombre)
         if not nombre:
             return
 
@@ -482,8 +545,8 @@ class App:
         }
 
     def _parsear_foja(self, valor):
-        # Acepta formatos como: 123, 123V o 123 V.
-        m = re.fullmatch(r"(\d+)\s*(V)?", valor.strip().upper())
+        # Acepta formatos como: 123, 123V, 123 V, 123-V o 123.V.
+        m = re.fullmatch(r"(\d+)(?:\s*[-\.]?\s*(V))?", valor.strip().upper())
         if not m:
             return None
 
@@ -606,7 +669,7 @@ class App:
         if foja_inicial is None or foja_final is None:
             messagebox.showerror(
                 "Error",
-                "Formato de foja invalido. Use numero y opcional V (ejemplo: 438 o 438V)."
+                "Formato de foja invalido. Use numero y opcional V (ejemplo: 438, 438V, 438-V o 438.V)."
             )
             return None
 
@@ -763,7 +826,7 @@ class App:
         if foja_inicial is None or foja_final is None:
             messagebox.showerror(
                 "Error",
-                "Formato de foja invalido. Use numero y opcional V (ejemplo: 438 o 438V)."
+                "Formato de foja invalido. Use numero y opcional V (ejemplo: 438, 438V, 438-V o 438.V)."
             )
             return None
 

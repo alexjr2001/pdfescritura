@@ -3,11 +3,17 @@ import os
 import shutil
 import hashlib
 import errno
+import ssl
 import urllib.error
 import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    import certifi
+except ImportError:  # pragma: no cover - depende del entorno de empaquetado
+    certifi = None
 
 from version import __version__
 
@@ -17,6 +23,29 @@ GITHUB_REPO = "pdfescritura"
 APP_ZIP_ASSET_NAME = "GeneradorTestimonios-win64.zip"
 CHECKSUMS_ASSET_NAME = "checksums.txt"
 APP_EXE_NAME = "GeneradorTestimonios.exe"
+
+_last_release_error = ""
+
+
+def _build_ssl_context() -> ssl.SSLContext:
+    # En ejecutables empaquetados, usar certifi evita fallos por cadenas CA no
+    # disponibles en el entorno embebido de OpenSSL.
+    cafile = None
+    if certifi is not None:
+        try:
+            cafile = certifi.where()
+        except Exception:
+            cafile = None
+
+    if cafile:
+        try:
+            return ssl.create_default_context(cafile=cafile)
+        except Exception:
+            pass
+    return ssl.create_default_context()
+
+
+_SSL_CONTEXT = _build_ssl_context()
 
 
 @dataclass(frozen=True)
@@ -83,19 +112,36 @@ def _request_json(url: str):
             "User-Agent": "pdfEscritura-updater",
         },
     )
-    with urllib.request.urlopen(request, timeout=15) as response:
+    with urllib.request.urlopen(request, timeout=15, context=_SSL_CONTEXT) as response:
         return json.load(response)
 
 
+def _format_release_error(exc: Exception) -> str:
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code} {exc.reason}".strip()
+    if isinstance(exc, urllib.error.URLError):
+        reason = getattr(exc, "reason", None)
+        return f"URLError: {reason}" if reason else "URLError"
+    if isinstance(exc, TimeoutError):
+        return "Timeout al consultar GitHub Releases"
+    if isinstance(exc, json.JSONDecodeError):
+        return "Respuesta inválida de GitHub Releases (JSON)"
+    return f"{type(exc).__name__}: {exc}".strip()
+
+
 def get_latest_release() -> ReleaseInfo | None:
+    global _last_release_error
     if GITHUB_OWNER == "TU_USUARIO" or GITHUB_REPO == "TU_REPOSITORIO":
+        _last_release_error = "Repositorio sin configurar"
         return None
 
     repo_slug = _repo_slug(GITHUB_REPO)
     url = f"https://api.github.com/repos/{GITHUB_OWNER}/{repo_slug}/releases/latest"
+    _last_release_error = ""
     try:
         data = _request_json(url)
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, urllib.error.HTTPError) as exc:
+        _last_release_error = _format_release_error(exc)
         return None
 
     version = str(data.get("tag_name", "")).strip()
@@ -117,6 +163,7 @@ def get_latest_release() -> ReleaseInfo | None:
             checksums_url=checksums_url,
         )
 
+    _last_release_error = f"No se encontró asset {APP_ZIP_ASSET_NAME} en el último release"
     return None
 
 
@@ -133,7 +180,7 @@ def _download_to_file(url: str, destination: Path) -> bool:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp_destination = destination.with_suffix(destination.suffix + ".download")
     try:
-        with urllib.request.urlopen(url, timeout=60) as response, open(temp_destination, "wb") as output:
+        with urllib.request.urlopen(url, timeout=60, context=_SSL_CONTEXT) as response, open(temp_destination, "wb") as output:
             shutil.copyfileobj(response, output)
         os.replace(temp_destination, destination)
         return True
@@ -279,9 +326,14 @@ def ensure_app_up_to_date() -> UpdateResult:
     latest = get_latest_release()
 
     if latest is None:
+        detalle = f" Detalle: {_last_release_error}." if _last_release_error else ""
         if local_exe and local_exe.exists():
-            return UpdateResult(local_exe, "Sin conexión o sin Release disponible. Se usa la versión local.", False)
-        return UpdateResult(None, "No hay versión local y no se pudo consultar GitHub Releases.", False)
+            return UpdateResult(
+                local_exe,
+                "Sin conexión o sin Release disponible. Se usa la versión local." + detalle,
+                False,
+            )
+        return UpdateResult(None, "No hay versión local y no se pudo consultar GitHub Releases." + detalle, False)
 
     needs_update = (not local_exe or not local_exe.exists()) or (
         _version_tuple(latest.version) > _version_tuple(local_version)
