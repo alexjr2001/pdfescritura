@@ -1,4 +1,7 @@
-from datetime import date
+import os
+import sys
+import traceback
+from datetime import date, datetime
 import re
 import unicodedata
 
@@ -196,3 +199,30 @@ def validar_fechas_no_futuras(fecha_notario: date, fechas_firma: list[date]) -> 
 		return False
 
 	return all(fecha <= hoy for fecha in fechas_firma)
+
+
+def ruta_errors_log() -> str:
+	if getattr(sys, "frozen", False):
+		base_dir = os.path.dirname(sys.executable)
+	else:
+		base_dir = os.getcwd()
+
+	return os.path.join(base_dir, "errors.log")
+
+
+def registrar_error_log(contexto: str, mensaje: str, exc: Exception | None = None, nivel: str = "INFO") -> None:
+	marca_tiempo = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+	lineas = [f"[{marca_tiempo}] [{nivel}] {contexto}", mensaje.strip()]
+
+	if exc is not None:
+		lineas.append("Traceback:")
+		lineas.extend(traceback.format_exception(type(exc), exc, exc.__traceback__))
+
+	lineas.append("")
+
+	try:
+		with open(ruta_errors_log(), "a", encoding="utf-8") as archivo:
+			archivo.write("\n".join(lineas))
+	except Exception:
+		# El registro no debe romper la generación.
+		pass

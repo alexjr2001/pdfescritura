@@ -2,18 +2,25 @@ import os
 import shutil
 import tempfile
 import sys
+from copy import deepcopy
 from io import BytesIO
 from collections.abc import Iterable
 
 from docx import Document
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Cm
+from docx.shared import Emu
 from docx.shared import Pt
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib.utils import ImageReader, simpleSplit
 from reportlab.pdfgen import canvas
 import win32com.client
+
+from utils import registrar_error_log
 
 
 class Generador:
@@ -59,6 +66,7 @@ class Generador:
         self._margen_superior_minimo_cm = 1.0
         self._ancho_extra_cm = 0.0
         self._titulo_encabezado = ""
+        self._docx_shape_id = 1000
         # Tuplas (indice_parrafo, caracter) de los párrafos que deben
         # rellenarse hasta el margen derecho. El relleno real se hace más
         # adelante, con Word abierto, para usar su medición exacta.
@@ -280,9 +288,7 @@ class Generador:
         documento = None
 
         try:
-            word = win32com.client.Dispatch("Word.Application")
-            word.Visible = False
-            word.DisplayAlerts = 0
+            word = cls._crear_word_application()
 
             documento = word.Documents.Open(os.path.abspath(ruta_temporal), ReadOnly=False)
             pagina_eliminada = cls._eliminar_primera_pagina_en_blanco_word(documento)
@@ -302,6 +308,15 @@ class Generador:
 
     def _base_recursos(self):
         return getattr(sys, "_MEIPASS", os.path.dirname(__file__))
+
+    @staticmethod
+    def _crear_word_application():
+        word = win32com.client.DispatchEx("Word.Application")
+        try:
+            word.DisplayAlerts = 0
+        except Exception:
+            pass
+        return word
 
     def configurar_reserva_pie(self, margen_inferior_minimo_cm=3.2):
         self._margen_inferior_minimo_cm = margen_inferior_minimo_cm
@@ -349,6 +364,183 @@ class Generador:
                 return ruta
 
         return candidatos[0]
+
+    def _siguiente_shape_id_docx(self):
+        self._docx_shape_id += 1
+        return self._docx_shape_id
+
+    @staticmethod
+    def _vaciar_story_docx(story):
+        for child in list(story._element):
+            if child.tag.endswith("}p") or child.tag.endswith("}tbl"):
+                story._element.remove(child)
+
+    def _configurar_footer_en_story_docx(self, story, seccion, ruta_logo):
+        self._vaciar_story_docx(story)
+
+        ancho_tabla = seccion.page_width - seccion.left_margin - seccion.right_margin
+        tabla = story.add_table(rows=1, cols=2, width=ancho_tabla)
+        tabla.autofit = False
+
+        ancho_logo = Cm(2.9)
+        ancho_texto = max(Emu(0), ancho_tabla - ancho_logo)
+
+        celda_texto = tabla.cell(0, 0)
+        celda_logo = tabla.cell(0, 1)
+        celda_texto.width = ancho_texto
+        celda_logo.width = ancho_logo
+        celda_texto.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        celda_logo.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+
+        parrafo_texto = celda_texto.paragraphs[0]
+        parrafo_texto.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        parrafo_texto.paragraph_format.left_indent = Pt(18)
+        parrafo_texto.paragraph_format.space_before = Pt(0)
+        parrafo_texto.paragraph_format.space_after = Pt(0)
+        run_texto = parrafo_texto.add_run(self.TEXTO_FOOTER)
+        run_texto.font.name = "Calibri"
+        run_texto.font.size = Pt(7)
+
+        parrafo_logo = celda_logo.paragraphs[0]
+        parrafo_logo.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        parrafo_logo.paragraph_format.space_before = Pt(0)
+        parrafo_logo.paragraph_format.space_after = Pt(0)
+        if ruta_logo and os.path.exists(ruta_logo):
+            run_logo = parrafo_logo.add_run()
+            run_logo.add_picture(ruta_logo, width=Cm(2.6))
+
+    def _aplicar_footer_legal_en_docx(self, documento_docx):
+        ruta_logo = self._obtener_logo_suavizado()
+
+        for seccion in documento_docx.sections:
+            seccion.different_first_page_header_footer = True
+            self._configurar_footer_en_story_docx(seccion.footer, seccion, ruta_logo)
+            self._configurar_footer_en_story_docx(seccion.first_page_footer, seccion, ruta_logo)
+            self._configurar_footer_en_story_docx(seccion.even_page_footer, seccion, ruta_logo)
+
+    def _crear_anchor_para_inline_docx(self, inline, pos_x, pos_y, nombre):
+        anchor = OxmlElement("wp:anchor")
+        anchor.set("distT", "0")
+        anchor.set("distB", "0")
+        anchor.set("distL", "0")
+        anchor.set("distR", "0")
+        anchor.set("simplePos", "0")
+        anchor.set("relativeHeight", "251658240")
+        anchor.set("behindDoc", "1")
+        anchor.set("locked", "0")
+        anchor.set("layoutInCell", "1")
+        anchor.set("allowOverlap", "1")
+
+        simple_pos = OxmlElement("wp:simplePos")
+        simple_pos.set("x", "0")
+        simple_pos.set("y", "0")
+        anchor.append(simple_pos)
+
+        position_h = OxmlElement("wp:positionH")
+        position_h.set("relativeFrom", "page")
+        pos_offset_h = OxmlElement("wp:posOffset")
+        pos_offset_h.text = str(int(pos_x))
+        position_h.append(pos_offset_h)
+        anchor.append(position_h)
+
+        position_v = OxmlElement("wp:positionV")
+        position_v.set("relativeFrom", "page")
+        pos_offset_v = OxmlElement("wp:posOffset")
+        pos_offset_v.text = str(int(pos_y))
+        position_v.append(pos_offset_v)
+        anchor.append(position_v)
+
+        anchor.append(deepcopy(inline.extent))
+
+        effect_extent = OxmlElement("wp:effectExtent")
+        effect_extent.set("l", "0")
+        effect_extent.set("t", "0")
+        effect_extent.set("r", "0")
+        effect_extent.set("b", "0")
+        anchor.append(effect_extent)
+
+        anchor.append(OxmlElement("wp:wrapNone"))
+
+        doc_pr = deepcopy(inline.docPr)
+        doc_pr.set("id", str(self._siguiente_shape_id_docx()))
+        doc_pr.set("name", nombre)
+        anchor.append(doc_pr)
+
+        c_nv_graphic_frame_pr = inline.xpath("./wp:cNvGraphicFramePr")
+        if c_nv_graphic_frame_pr:
+            anchor.append(deepcopy(c_nv_graphic_frame_pr[0]))
+
+        anchor.append(deepcopy(inline.graphic))
+        return anchor
+
+    def _agregar_imagen_flotante_en_story_docx(self, story, ruta_imagen, ancho, alto, pos_x, pos_y, nombre):
+        parrafo = story.add_paragraph()
+        parrafo.paragraph_format.space_before = Pt(0)
+        parrafo.paragraph_format.space_after = Pt(0)
+        run = parrafo.add_run()
+        inline_shape = run.add_picture(ruta_imagen, width=Emu(int(ancho)), height=Emu(int(alto)))
+        drawing = run._r.xpath("./w:drawing")[0]
+        inline = drawing.xpath("./wp:inline")[0]
+        anchor = self._crear_anchor_para_inline_docx(inline, pos_x, pos_y, nombre)
+        drawing.remove(inline)
+        drawing.append(anchor)
+        return inline_shape
+
+    def _aplicar_firma_lateral_en_docx(self, documento_docx):
+        ruta_firma = self._obtener_ruta_firma()
+        if not ruta_firma or not os.path.exists(ruta_firma):
+            return
+
+        ancho_firma = int(Cm(1.4))
+        alto_firma = ancho_firma
+
+        try:
+            with Image.open(ruta_firma) as imagen_firma:
+                ancho_original, alto_original = imagen_firma.size
+                if ancho_original > 0:
+                    alto_firma = int(ancho_firma * (alto_original / ancho_original))
+        except Exception:
+            pass
+
+        pos_x = int(Cm(-0.05))
+
+        for indice_seccion, seccion in enumerate(documento_docx.sections, start=1):
+            seccion.different_first_page_header_footer = True
+            pos_y = int((int(seccion.page_height) - alto_firma) / 2)
+
+            self._agregar_imagen_flotante_en_story_docx(
+                seccion.header,
+                ruta_firma,
+                ancho_firma,
+                alto_firma,
+                pos_x,
+                pos_y,
+                f"FirmaMargenHeader_{indice_seccion}_primary",
+            )
+            self._agregar_imagen_flotante_en_story_docx(
+                seccion.first_page_header,
+                ruta_firma,
+                ancho_firma,
+                alto_firma,
+                pos_x,
+                pos_y,
+                f"FirmaMargenHeader_{indice_seccion}_first",
+            )
+            self._agregar_imagen_flotante_en_story_docx(
+                seccion.even_page_header,
+                ruta_firma,
+                ancho_firma,
+                alto_firma,
+                pos_x,
+                pos_y,
+                f"FirmaMargenHeader_{indice_seccion}_even",
+            )
+
+    def _postprocesar_docx_sin_com(self, ruta_docx):
+        documento_docx = Document(ruta_docx)
+        self._aplicar_footer_legal_en_docx(documento_docx)
+        self._aplicar_firma_lateral_en_docx(documento_docx)
+        documento_docx.save(ruta_docx)
 
     def _aplicar_firma_marca_agua_en_word(self, documento):
         """Inserta la firma lateral izquierda en todas las páginas de Word."""
@@ -835,11 +1027,27 @@ class Generador:
         self._centrar_bloque_por_margenes()
         self._asegurar_margen_inferior_minimo()
 
-    def guardar(self, ruta):
+    def guardar(self, ruta, avisar=None):
+        def emitir_aviso(mensaje):
+            registrar_error_log("Generador.guardar", mensaje, nivel="WARNING")
+            if avisar is not None:
+                avisar(mensaje)
+
         try:
+            registrar_error_log(
+                "Generador.guardar",
+                f"Inicio de guardado. ruta={ruta!r}",
+                nivel="INFO",
+            )
             self.aplicar_formato_global()
+            registrar_error_log("Generador.guardar", "Formato global aplicado.", nivel="INFO")
 
             extension = os.path.splitext(ruta)[1].lower()
+            registrar_error_log(
+                "Generador.guardar",
+                f"Extensión detectada: {extension!r}",
+                nivel="INFO",
+            )
 
             # Se abre Word siempre (haya o no párrafos con "=" pendientes)
             # porque es la única forma de medir exactamente el mismo ancho
@@ -851,31 +1059,118 @@ class Generador:
             with tempfile.TemporaryDirectory() as temp_dir:
                 ruta_docx = os.path.join(temp_dir, "testimonio.docx")
                 self.doc.save(ruta_docx)
+                registrar_error_log("Generador.guardar", f"DOCX temporal creado en {ruta_docx!r}.", nivel="INFO")
+                ruta_docx_final_local = None
+                ruta_docx_intermedio_local = None
 
-                word = win32com.client.Dispatch("Word.Application")
-                word.Visible = False
+                word = self._crear_word_application()
+                registrar_error_log("Generador.guardar", "Instancia de Word abierta en segundo plano.", nivel="INFO")
 
                 try:
                     documento = word.Documents.Open(os.path.abspath(ruta_docx))
+                    registrar_error_log("Generador.guardar", "Documento temporal abierto en Word.", nivel="INFO")
                     try:
                         self._aplicar_marca_agua_en_word(documento)
+                        registrar_error_log("Generador.guardar", "Marca de agua aplicada.", nivel="INFO")
                         self._rellenar_iguales_en_documento_word(documento)
-                        if extension == ".docx":
-                            self._aplicar_footer_legal_en_word(documento)
-                            self._aplicar_firma_marca_agua_en_word(documento)
+                        registrar_error_log("Generador.guardar", "Relleno de '=' aplicado.", nivel="INFO")
 
                         formato = (
                             self.FORMATO_PDF if extension == ".pdf" else self.FORMATO_DOCX
                         )
-                        documento.SaveAs(os.path.abspath(ruta), FileFormat=formato)
+                        if extension == ".docx":
+                            archivo_temp_local = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+                            ruta_docx_intermedio_local = archivo_temp_local.name
+                            archivo_temp_local.close()
+                            documento.SaveAs(os.path.abspath(ruta_docx_intermedio_local), FileFormat=formato)
+                        else:
+                            documento.SaveAs(os.path.abspath(ruta), FileFormat=formato)
+                        registrar_error_log(
+                            "Generador.guardar",
+                            f"Documento guardado en {os.path.abspath(ruta)!r} con formato {formato!r}.",
+                            nivel="INFO",
+                        )
+
+                        if extension == ".docx":
+                            emitir_aviso(
+                                "El DOCX terminó de guardarse desde Word. "
+                                "Si el archivo se ve incompleto, el problema quedó acotado al postprocesado COM."
+                            )
                     finally:
                         documento.Close(False)
                 finally:
                     word.Quit()
+                    registrar_error_log("Generador.guardar", "Word cerrado.", nivel="INFO")
+
+            if extension == ".docx":
+                if not ruta_docx_intermedio_local or not os.path.exists(ruta_docx_intermedio_local):
+                    raise FileNotFoundError(
+                        "No se generó el DOCX intermedio local para el postprocesado."
+                    )
+
+                emitir_aviso(
+                    "Word guardó el DOCX base correctamente. Ahora se aplicará footer y firma directamente sobre el archivo DOCX, sin una segunda pasada de Word COM."
+                )
+                postproceso_completo = True
+                try:
+                    registrar_error_log("Generador.guardar", "Iniciando postprocesado DOCX sin COM.", nivel="INFO")
+                    self._postprocesar_docx_sin_com(ruta_docx_intermedio_local)
+                    registrar_error_log("Generador.guardar", "Footer y firma insertados en el DOCX sin COM.", nivel="INFO")
+                except Exception as exc:
+                    postproceso_completo = False
+                    registrar_error_log(
+                        "Generador.guardar",
+                        "Fallo el postprocesado DOCX sin COM.",
+                        exc=exc,
+                        nivel="ERROR",
+                    )
+                    emitir_aviso(
+                        "No se pudo aplicar footer y firma directamente en el DOCX. Se conservará el DOCX base ya guardado. "
+                        f"Error técnico: {exc!r}."
+                    )
+
+                if postproceso_completo:
+                    try:
+                        shutil.copy2(ruta_docx_intermedio_local, os.path.abspath(ruta))
+                        registrar_error_log(
+                            "Generador.guardar",
+                            f"DOCX final copiado a {os.path.abspath(ruta)!r} desde la ruta local temporal.",
+                            nivel="INFO",
+                        )
+                    except Exception as exc:
+                        registrar_error_log(
+                            "Generador.guardar",
+                            "No se pudo copiar el DOCX final desde la ruta local temporal al destino.",
+                            exc=exc,
+                            nivel="ERROR",
+                        )
+                        emitir_aviso(
+                            "El DOCX se procesó en local, pero no pudo copiarse a la ruta final. Se conservará el DOCX base ya guardado. "
+                            f"Error técnico: {exc!r}."
+                        )
+                else:
+                    registrar_error_log(
+                        "Generador.guardar",
+                        "Se omite la copia final del DOCX postprocesado porque Word COM falló; se conserva el DOCX base ya guardado.",
+                        nivel="WARNING",
+                    )
 
             if extension == ".pdf":
+                registrar_error_log("Generador.guardar", "Iniciando estampado de firma en PDF.", nivel="INFO")
                 self._estampar_firma_en_pdf(os.path.abspath(ruta))
+                registrar_error_log("Generador.guardar", "Firma estampada en PDF.", nivel="INFO")
+            registrar_error_log("Generador.guardar", "Guardado finalizado sin excepción.", nivel="INFO")
+        except Exception as exc:
+            registrar_error_log(
+                "Generador.guardar",
+                f"Error inesperado durante el guardado de {ruta!r}.",
+                exc=exc,
+                nivel="ERROR",
+            )
+            raise
         finally:
             if self.logo_temporal and os.path.exists(self.logo_temporal):
                 os.remove(self.logo_temporal)
                 self.logo_temporal = None
+            if extension == ".docx" and ruta_docx_intermedio_local and os.path.exists(ruta_docx_intermedio_local):
+                os.remove(ruta_docx_intermedio_local)

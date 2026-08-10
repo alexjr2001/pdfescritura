@@ -9,7 +9,7 @@ from tkcalendar import DateEntry
 
 from extractor import Escritura
 from generador import Generador
-from utils import fecha_a_texto_interfaz, fecha_a_texto_notarial, validar_fechas_no_futuras
+from utils import fecha_a_texto_interfaz, fecha_a_texto_notarial, registrar_error_log, ruta_errors_log, validar_fechas_no_futuras
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -190,6 +190,39 @@ class App:
         self.loader_bar.set(valor)
         self.root.update_idletasks()
         self.root.update()
+
+    def _preparar_popup(self):
+        self.root.update_idletasks()
+        self.root.lift()
+        try:
+            self.root.attributes("-topmost", True)
+            self.root.attributes("-topmost", False)
+        except Exception:
+            pass
+        try:
+            self.root.focus_force()
+        except Exception:
+            pass
+
+    def _showinfo(self, titulo, mensaje):
+        self._preparar_popup()
+        return messagebox.showinfo(titulo, mensaje, parent=self.root)
+
+    def _showwarning(self, titulo, mensaje):
+        self._preparar_popup()
+        return messagebox.showwarning(titulo, mensaje, parent=self.root)
+
+    def _showerror(self, titulo, mensaje):
+        self._preparar_popup()
+        return messagebox.showerror(titulo, mensaje, parent=self.root)
+
+    def _mostrar_error_y_loguear(self, contexto, mensaje, exc=None):
+        registrar_error_log(contexto, mensaje, exc=exc, nivel="ERROR")
+        detalle = f"\n\nRevisa errors.log para el detalle técnico en:\n{ruta_errors_log()}"
+        if exc is not None:
+            self._showerror("Error", f"{mensaje}{detalle}")
+        else:
+            self._showwarning("Aviso", f"{mensaje}{detalle}")
 
     def abrir(self):
 
@@ -584,7 +617,7 @@ class App:
         if pagina_eliminada:
             aviso_pagina = "\n\nAviso: se detectó y eliminó una primera página en blanco del Word fuente."
 
-        messagebox.showinfo(
+        self._showinfo(
             "Éxito",
             "Documentos generados correctamente:\n"
             f"- Testimonio PDF: {ruta_testimonio}\n"
@@ -744,27 +777,58 @@ class App:
         numero_documento = self.numero_documento.strip() or "SIN_NUMERO"
         prefijo = "AV" if es_acta else "EP"
         nombre_pdf = f"{prefijo} {numero_documento}.pdf"
+        advertencias = []
 
         try:
             try:
                 os.makedirs(carpeta_destino, exist_ok=True)
                 ruta_salida = os.path.join(carpeta_destino, nombre_pdf)
-                g.guardar(ruta_salida)
-                if mostrar_mensaje:
-                    messagebox.showinfo(
+                g.guardar(ruta_salida, avisar=advertencias.append)
+                if mostrar_mensaje and advertencias:
+                    self._showwarning(
+                        "Advertencias al generar el testimonio",
+                        "El archivo se generó, pero Word reportó estas advertencias durante el postprocesado:\n\n"
+                        + "\n\n".join(f"- {advertencia}" for advertencia in advertencias)
+                    )
+                elif mostrar_mensaje:
+                    self._showinfo(
                         "Éxito",
                         f"PDF generado correctamente en:\n{ruta_salida}"
                     )
-            except OSError:
+            except OSError as exc:
+                registrar_error_log(
+                    "interfaz.generar",
+                    f"No se pudo usar la ruta de red {carpeta_destino!r}; se intentará guardar en la carpeta actual.",
+                    exc=exc,
+                    nivel="WARNING",
+                )
                 ruta_salida = nombre_pdf
-                g.guardar(ruta_salida)
+                g.guardar(ruta_salida, avisar=advertencias.append)
+                if mostrar_mensaje and advertencias:
+                    self._showwarning(
+                        "Advertencias al generar el testimonio",
+                        "El archivo se generó, pero Word reportó estas advertencias durante el postprocesado:\n\n"
+                        + "\n\n".join(f"- {advertencia}" for advertencia in advertencias)
+                    )
+                elif mostrar_mensaje:
+                    self._showinfo(
+                        "Éxito",
+                        f"PDF generado correctamente en:\n{os.path.abspath(ruta_salida)}"
+                    )
                 if mostrar_mensaje:
-                    messagebox.showwarning(
+                    self._showwarning(
                         "Aviso",
                         "No se pudo usar la ruta en Z:. Se guardó en la carpeta actual:\n"
                         f"{os.path.abspath(ruta_salida)}"
                     )
                 ruta_salida = os.path.abspath(ruta_salida)
+            except Exception as exc:
+                self._mostrar_error_y_loguear(
+                    "interfaz.generar",
+                    "La generación del testimonio falló antes de completar el guardado.",
+                    exc=exc,
+                )
+                return None
         finally:
             if temporal_a_eliminar and os.path.exists(temporal_a_eliminar):
                 os.remove(temporal_a_eliminar)
@@ -922,6 +986,7 @@ class App:
         nombre_parte = f"{tipo_nombre} {numero_documento}"
         if es_acta:
             nombre_parte += " - PARTE"
+        advertencias = []
 
         try:
             try:
@@ -929,28 +994,58 @@ class App:
 
                 # Guardar como Word
                 ruta_word = os.path.join(carpeta_destino, f"{nombre_parte}.docx")
-                g.guardar(ruta_word)
+                g.guardar(ruta_word, avisar=advertencias.append)
 
                 # Guardar como PDF
                 ruta_pdf = os.path.join(carpeta_destino, f"{nombre_parte}.pdf")
-                g.guardar(ruta_pdf)
-                if mostrar_mensaje:
-                    messagebox.showinfo(
+                g.guardar(ruta_pdf, avisar=advertencias.append)
+                if mostrar_mensaje and advertencias:
+                    self._showwarning(
+                        "Advertencias al generar el parte",
+                        "El documento se generó, pero Word reportó estas advertencias durante el postprocesado:\n\n"
+                        + "\n\n".join(f"- {advertencia}" for advertencia in advertencias)
+                    )
+                elif mostrar_mensaje:
+                    self._showinfo(
                         "Éxito",
                         f"PARTE generado correctamente en:\n{carpeta_destino}"
                     )
-            except OSError:
+            except OSError as exc:
+                registrar_error_log(
+                    "interfaz.generar_parte",
+                    f"No se pudo usar la ruta de red {carpeta_destino!r}; se intentará guardar en la carpeta actual.",
+                    exc=exc,
+                    nivel="WARNING",
+                )
                 ruta_word = f"{nombre_parte}.docx"
                 ruta_pdf = f"{nombre_parte}.pdf"
-                g.guardar(ruta_word)
-                g.guardar(ruta_pdf)
+                g.guardar(ruta_word, avisar=advertencias.append)
+                g.guardar(ruta_pdf, avisar=advertencias.append)
                 ruta_word = os.path.abspath(ruta_word)
                 ruta_pdf = os.path.abspath(ruta_pdf)
+                if mostrar_mensaje and advertencias:
+                    self._showwarning(
+                        "Advertencias al generar el parte",
+                        "El documento se generó, pero Word reportó estas advertencias durante el postprocesado:\n\n"
+                        + "\n\n".join(f"- {advertencia}" for advertencia in advertencias)
+                    )
+                elif mostrar_mensaje:
+                    self._showinfo(
+                        "Éxito",
+                        f"PARTE generado correctamente en:\n{os.path.abspath(carpeta_destino)}"
+                    )
                 if mostrar_mensaje:
-                    messagebox.showwarning(
+                    self._showwarning(
                         "Aviso",
                         f"Se guardó en la carpeta actual:\n{os.path.abspath(carpeta_destino)}"
                     )
+            except Exception as exc:
+                self._mostrar_error_y_loguear(
+                    "interfaz.generar_parte",
+                    "La generación del parte falló antes de completar el guardado.",
+                    exc=exc,
+                )
+                return None
         finally:
             if temporal_a_eliminar and os.path.exists(temporal_a_eliminar):
                 os.remove(temporal_a_eliminar)
