@@ -10,6 +10,7 @@ from tkcalendar import DateEntry
 from extractor import Escritura
 from generador import Generador
 from utils import fecha_a_texto_interfaz, fecha_a_texto_notarial, registrar_error_log, ruta_errors_log, validar_fechas_no_futuras
+from version import __version__
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -20,7 +21,7 @@ class App:
     def __init__(self):
 
         self.root = ctk.CTk()
-        self.root.title("Generador de Testimonios y Partes")
+        self.root.title(f"Generador de Testimonios y Partes v{__version__}")
         self.root.geometry("720x750")
 
         self.personas = []
