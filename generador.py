@@ -2,18 +2,13 @@ import os
 import shutil
 import tempfile
 import sys
-from copy import deepcopy
 from io import BytesIO
 from collections.abc import Iterable
 
 from docx import Document
-from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Cm
-from docx.shared import Emu
 from docx.shared import Pt
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
 from PIL import Image
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib.utils import ImageReader, simpleSplit
@@ -62,11 +57,11 @@ class Generador:
 
         self.doc = Document(ruta)
         self.logo_temporal = None
+        self.logo_marca_agua_temporal = None
         self._margen_inferior_minimo_cm = None
         self._margen_superior_minimo_cm = 1.0
         self._ancho_extra_cm = 0.0
         self._titulo_encabezado = ""
-        self._docx_shape_id = 1000
         # Tuplas (indice_parrafo, caracter) de los párrafos que deben
         # rellenarse hasta el margen derecho. El relleno real se hace más
         # adelante, con Word abierto, para usar su medición exacta.
@@ -351,6 +346,32 @@ class Generador:
 
         return self.logo_temporal
 
+    def _obtener_logo_marca_agua_fondo(self):
+        # Logo muy transparente para usarlo como marca de agua central del cuerpo del PDF.
+        if self.logo_marca_agua_temporal and os.path.exists(self.logo_marca_agua_temporal):
+            return self.logo_marca_agua_temporal
+
+        logo_original = os.path.join(self._base_recursos(), "assets", "logo.png")
+
+        if not os.path.exists(logo_original):
+            return logo_original
+
+        with Image.open(logo_original).convert("RGBA") as imagen:
+            canal_alpha = imagen.split()[3]
+            canal_alpha = canal_alpha.point(lambda valor: int(valor * 0.12))
+            imagen.putalpha(canal_alpha)
+
+            archivo_temp = tempfile.NamedTemporaryFile(
+                suffix=".png",
+                delete=False,
+            )
+
+            self.logo_marca_agua_temporal = archivo_temp.name
+            archivo_temp.close()
+            imagen.save(self.logo_marca_agua_temporal)
+
+        return self.logo_marca_agua_temporal
+
     def _obtener_ruta_firma(self):
 
         base_dir = self._base_recursos()
@@ -365,320 +386,11 @@ class Generador:
 
         return candidatos[0]
 
-    def _siguiente_shape_id_docx(self):
-        self._docx_shape_id += 1
-        return self._docx_shape_id
-
-    @staticmethod
-    def _vaciar_story_docx(story):
-        for child in list(story._element):
-            if child.tag.endswith("}p") or child.tag.endswith("}tbl"):
-                story._element.remove(child)
-
-    def _configurar_footer_en_story_docx(self, story, seccion, ruta_logo):
-        self._vaciar_story_docx(story)
-
-        ancho_tabla = seccion.page_width - seccion.left_margin - seccion.right_margin
-        tabla = story.add_table(rows=1, cols=2, width=ancho_tabla)
-        tabla.autofit = False
-
-        ancho_logo = Cm(2.9)
-        ancho_texto = max(Emu(0), ancho_tabla - ancho_logo)
-
-        celda_texto = tabla.cell(0, 0)
-        celda_logo = tabla.cell(0, 1)
-        celda_texto.width = ancho_texto
-        celda_logo.width = ancho_logo
-        celda_texto.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-        celda_logo.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-
-        parrafo_texto = celda_texto.paragraphs[0]
-        parrafo_texto.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        parrafo_texto.paragraph_format.left_indent = Pt(18)
-        parrafo_texto.paragraph_format.space_before = Pt(0)
-        parrafo_texto.paragraph_format.space_after = Pt(0)
-        run_texto = parrafo_texto.add_run(self.TEXTO_FOOTER)
-        run_texto.font.name = "Calibri"
-        run_texto.font.size = Pt(7)
-
-        parrafo_logo = celda_logo.paragraphs[0]
-        parrafo_logo.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        parrafo_logo.paragraph_format.space_before = Pt(0)
-        parrafo_logo.paragraph_format.space_after = Pt(0)
-        if ruta_logo and os.path.exists(ruta_logo):
-            run_logo = parrafo_logo.add_run()
-            run_logo.add_picture(ruta_logo, width=Cm(2.6))
-
-    def _aplicar_footer_legal_en_docx(self, documento_docx):
-        ruta_logo = self._obtener_logo_suavizado()
-
-        for seccion in documento_docx.sections:
-            seccion.different_first_page_header_footer = True
-            self._configurar_footer_en_story_docx(seccion.footer, seccion, ruta_logo)
-            self._configurar_footer_en_story_docx(seccion.first_page_footer, seccion, ruta_logo)
-            self._configurar_footer_en_story_docx(seccion.even_page_footer, seccion, ruta_logo)
-
-    def _crear_anchor_para_inline_docx(self, inline, pos_x, pos_y, nombre):
-        anchor = OxmlElement("wp:anchor")
-        anchor.set("distT", "0")
-        anchor.set("distB", "0")
-        anchor.set("distL", "0")
-        anchor.set("distR", "0")
-        anchor.set("simplePos", "0")
-        anchor.set("relativeHeight", "251658240")
-        anchor.set("behindDoc", "1")
-        anchor.set("locked", "0")
-        anchor.set("layoutInCell", "1")
-        anchor.set("allowOverlap", "1")
-
-        simple_pos = OxmlElement("wp:simplePos")
-        simple_pos.set("x", "0")
-        simple_pos.set("y", "0")
-        anchor.append(simple_pos)
-
-        position_h = OxmlElement("wp:positionH")
-        position_h.set("relativeFrom", "page")
-        pos_offset_h = OxmlElement("wp:posOffset")
-        pos_offset_h.text = str(int(pos_x))
-        position_h.append(pos_offset_h)
-        anchor.append(position_h)
-
-        position_v = OxmlElement("wp:positionV")
-        position_v.set("relativeFrom", "page")
-        pos_offset_v = OxmlElement("wp:posOffset")
-        pos_offset_v.text = str(int(pos_y))
-        position_v.append(pos_offset_v)
-        anchor.append(position_v)
-
-        anchor.append(deepcopy(inline.extent))
-
-        effect_extent = OxmlElement("wp:effectExtent")
-        effect_extent.set("l", "0")
-        effect_extent.set("t", "0")
-        effect_extent.set("r", "0")
-        effect_extent.set("b", "0")
-        anchor.append(effect_extent)
-
-        anchor.append(OxmlElement("wp:wrapNone"))
-
-        doc_pr = deepcopy(inline.docPr)
-        doc_pr.set("id", str(self._siguiente_shape_id_docx()))
-        doc_pr.set("name", nombre)
-        anchor.append(doc_pr)
-
-        c_nv_graphic_frame_pr = inline.xpath("./wp:cNvGraphicFramePr")
-        if c_nv_graphic_frame_pr:
-            anchor.append(deepcopy(c_nv_graphic_frame_pr[0]))
-
-        anchor.append(deepcopy(inline.graphic))
-        return anchor
-
-    def _agregar_imagen_flotante_en_story_docx(self, story, ruta_imagen, ancho, alto, pos_x, pos_y, nombre):
-        parrafo = story.add_paragraph()
-        parrafo.paragraph_format.space_before = Pt(0)
-        parrafo.paragraph_format.space_after = Pt(0)
-        run = parrafo.add_run()
-        inline_shape = run.add_picture(ruta_imagen, width=Emu(int(ancho)), height=Emu(int(alto)))
-        drawing = run._r.xpath("./w:drawing")[0]
-        inline = drawing.xpath("./wp:inline")[0]
-        anchor = self._crear_anchor_para_inline_docx(inline, pos_x, pos_y, nombre)
-        drawing.remove(inline)
-        drawing.append(anchor)
-        return inline_shape
-
-    def _aplicar_firma_lateral_en_docx(self, documento_docx):
-        ruta_firma = self._obtener_ruta_firma()
-        if not ruta_firma or not os.path.exists(ruta_firma):
-            return
-
-        ancho_firma = int(Cm(1.4))
-        alto_firma = ancho_firma
-
-        try:
-            with Image.open(ruta_firma) as imagen_firma:
-                ancho_original, alto_original = imagen_firma.size
-                if ancho_original > 0:
-                    alto_firma = int(ancho_firma * (alto_original / ancho_original))
-        except Exception:
-            pass
-
-        pos_x = int(Cm(-0.05))
-
-        for indice_seccion, seccion in enumerate(documento_docx.sections, start=1):
-            seccion.different_first_page_header_footer = True
-            pos_y = int((int(seccion.page_height) - alto_firma) / 2)
-
-            self._agregar_imagen_flotante_en_story_docx(
-                seccion.header,
-                ruta_firma,
-                ancho_firma,
-                alto_firma,
-                pos_x,
-                pos_y,
-                f"FirmaMargenHeader_{indice_seccion}_primary",
-            )
-            self._agregar_imagen_flotante_en_story_docx(
-                seccion.first_page_header,
-                ruta_firma,
-                ancho_firma,
-                alto_firma,
-                pos_x,
-                pos_y,
-                f"FirmaMargenHeader_{indice_seccion}_first",
-            )
-            self._agregar_imagen_flotante_en_story_docx(
-                seccion.even_page_header,
-                ruta_firma,
-                ancho_firma,
-                alto_firma,
-                pos_x,
-                pos_y,
-                f"FirmaMargenHeader_{indice_seccion}_even",
-            )
-
-    def _postprocesar_docx_sin_com(self, ruta_docx):
-        documento_docx = Document(ruta_docx)
-        self._aplicar_footer_legal_en_docx(documento_docx)
-        self._aplicar_firma_lateral_en_docx(documento_docx)
-        documento_docx.save(ruta_docx)
-
-    def _aplicar_firma_marca_agua_en_word(self, documento):
-        """Inserta la firma lateral izquierda en todas las páginas de Word."""
-
-        ruta_firma = self._obtener_ruta_firma()
-        if not ruta_firma or not os.path.exists(ruta_firma):
-            return
-
-        ancho_firma = 1.4 * self.PUNTOS_POR_CM
-        alto_firma = ancho_firma
-
-        try:
-            with Image.open(ruta_firma) as imagen_firma:
-                ancho_original, alto_original = imagen_firma.size
-                if ancho_original > 0:
-                    alto_firma = ancho_firma * (alto_original / ancho_original)
-        except Exception:
-            pass
-
-        # Deja la firma en el margen izquierdo con un pequeño respiro.
-        x_firma = -0.05 * self.PUNTOS_POR_CM
-        if documento.Sections.Count < 1:
-            return
-
-        # Coordenada vertical global (idéntica para todo el documento).
-        altura_pagina_base = documento.Sections(1).PageSetup.PageHeight
-        y_firma_global = (altura_pagina_base - alto_firma) / 2.0
-
-        # Limpia posibles firmas antiguas en cuerpo (estrategias previas).
-        for j in range(documento.Shapes.Count, 0, -1):
-            forma = documento.Shapes.Item(j)
-            if str(forma.Name).startswith("FirmaMargenTestimonio"):
-                forma.Delete()
-
-        # Limpia firmas antiguas en headers para evitar "solo primera página".
-        for indice_seccion in range(1, documento.Sections.Count + 1):
-            seccion = documento.Sections(indice_seccion)
-            for tipo_header in (
-                self.WD_HEADER_FOOTER_PRIMARY,
-                self.WD_HEADER_FOOTER_FIRST_PAGE,
-                self.WD_HEADER_FOOTER_EVEN_PAGES,
-            ):
-                try:
-                    header = seccion.Headers(tipo_header)
-                    for j in range(header.Shapes.Count, 0, -1):
-                        forma = header.Shapes.Item(j)
-                        if str(forma.Name).startswith("FirmaMargenTestimonio"):
-                            forma.Delete()
-                except Exception:
-                    pass
-
-        def _insertar_en_pagina(pagina):
-            ancla = documento.GoTo(
-                What=self.WD_GO_TO_PAGE,
-                Which=self.WD_GO_TO_ABSOLUTE,
-                Count=pagina,
-            )
-
-            firma = documento.Shapes.AddPicture(
-                os.path.abspath(ruta_firma),
-                False,
-                True,
-                x_firma,
-                y_firma_global,
-                ancho_firma,
-                alto_firma,
-                ancla,
-            )
-
-            firma.Name = f"FirmaMargenTestimonio_{pagina}"
-            firma.WrapFormat.Type = self.WD_WRAP_NONE
-            firma.RelativeHorizontalPosition = self.WD_RELATIVE_HORIZONTAL_POSITION_PAGE
-            firma.RelativeVerticalPosition = self.WD_RELATIVE_VERTICAL_POSITION_PAGE
-            firma.LockAspectRatio = self.MSO_TRUE
-            firma.Left = x_firma
-            firma.Top = y_firma_global
-            try:
-                firma.LockAnchor = self.MSO_TRUE
-            except Exception:
-                pass
-            try:
-                firma.LayoutInCell = self.MSO_FALSE
-            except Exception:
-                pass
-            try:
-                firma.ZOrder(self.MSO_SEND_BEHIND_TEXT)
-            except Exception:
-                pass
-
-        # Inserta y verifica cobertura de la primera a la última página.
-        for _ in range(5):
-            try:
-                documento.Repaginate()
-            except Exception:
-                pass
-
-            total_paginas = documento.ComputeStatistics(self.WD_STATISTIC_PAGES)
-            paginas_con_firma = set()
-            for j in range(1, documento.Shapes.Count + 1):
-                nombre = str(documento.Shapes.Item(j).Name)
-                if not nombre.startswith("FirmaMargenTestimonio_"):
-                    continue
-                sufijo = nombre.replace("FirmaMargenTestimonio_", "", 1)
-                if sufijo.isdigit():
-                    paginas_con_firma.add(int(sufijo))
-
-            faltantes = [
-                pagina
-                for pagina in range(1, total_paginas + 1)
-                if pagina not in paginas_con_firma
-            ]
-            if not faltantes:
-                break
-
-            for pagina in faltantes:
-                _insertar_en_pagina(pagina)
-
-        # Pase final defensivo para asegurar la ultima pagina.
-        try:
-            documento.Repaginate()
-        except Exception:
-            pass
-
-        total_paginas_final = documento.ComputeStatistics(self.WD_STATISTIC_PAGES)
-        ultima_tiene_firma = False
-        nombre_ultima = f"FirmaMargenTestimonio_{total_paginas_final}"
-        for j in range(1, documento.Shapes.Count + 1):
-            if str(documento.Shapes.Item(j).Name) == nombre_ultima:
-                ultima_tiene_firma = True
-                break
-
-        if not ultima_tiene_firma and total_paginas_final >= 1:
-            _insertar_en_pagina(total_paginas_final)
-
     def _estampar_firma_en_pdf(self, ruta_pdf):
 
         ruta_firma = self._obtener_ruta_firma()
         ruta_logo = self._obtener_logo_suavizado()
+        ruta_marca_agua = self._obtener_logo_marca_agua_fondo()
 
         if not os.path.exists(ruta_firma):
             return
@@ -687,6 +399,7 @@ class Generador:
         escritor = PdfWriter()
         imagen_firma = ImageReader(ruta_firma)
         imagen_logo = ImageReader(ruta_logo) if os.path.exists(ruta_logo) else None
+        imagen_marca_agua = ImageReader(ruta_marca_agua) if os.path.exists(ruta_marca_agua) else None
         total_paginas = len(lector.pages)
 
         for indice, pagina in enumerate(lector.pages):
@@ -694,7 +407,8 @@ class Generador:
             alto_pagina = float(pagina.mediabox.height)
             margen_izquierdo = 2.5 * self.PUNTOS_POR_CM
 
-            ancho_firma = 1.4 * self.PUNTOS_POR_CM
+            # Ajuste del tamaño visible de la firma lateral en PDF.
+            ancho_firma = 2.7 * self.PUNTOS_POR_CM
             ancho_original, alto_original = imagen_firma.getSize()
             alto_firma = ancho_firma * (alto_original / ancho_original)
 
@@ -756,6 +470,32 @@ class Generador:
 
             overlay.save()
             overlay_stream.seek(0)
+
+            if imagen_marca_agua is not None:
+                # Marca de agua del logo centrada en el cuerpo, detrás del texto de la página.
+                ancho_marca = ancho_pagina * 0.55
+                marca_w_original, marca_h_original = imagen_marca_agua.getSize()
+                alto_marca = ancho_marca * (marca_h_original / marca_w_original)
+                x_marca = (ancho_pagina - ancho_marca) / 2
+                y_marca = (alto_pagina - alto_marca) / 2
+
+                fondo_stream = BytesIO()
+                fondo = canvas.Canvas(fondo_stream, pagesize=(ancho_pagina, alto_pagina))
+                fondo.drawImage(
+                    imagen_marca_agua,
+                    x_marca,
+                    y_marca,
+                    width=ancho_marca,
+                    height=alto_marca,
+                    preserveAspectRatio=True,
+                    mask="auto",
+                )
+                fondo.save()
+                fondo_stream.seek(0)
+
+                pagina_fondo = PdfReader(fondo_stream).pages[0]
+                pagina_fondo.merge_page(pagina)
+                pagina = pagina_fondo
 
             pagina_overlay = PdfReader(overlay_stream).pages[0]
             pagina.merge_page(pagina_overlay)
@@ -1027,7 +767,7 @@ class Generador:
         self._centrar_bloque_por_margenes()
         self._asegurar_margen_inferior_minimo()
 
-    def guardar(self, ruta, avisar=None):
+    def guardar(self, ruta, avisar=None, incluir_firma_footer=False):
         def emitir_aviso(mensaje):
             registrar_error_log("Generador.guardar", mensaje, nivel="WARNING")
             if avisar is not None:
@@ -1060,7 +800,6 @@ class Generador:
                 ruta_docx = os.path.join(temp_dir, "testimonio.docx")
                 self.doc.save(ruta_docx)
                 registrar_error_log("Generador.guardar", f"DOCX temporal creado en {ruta_docx!r}.", nivel="INFO")
-                ruta_docx_final_local = None
                 ruta_docx_intermedio_local = None
 
                 word = self._crear_word_application()
@@ -1091,11 +830,6 @@ class Generador:
                             nivel="INFO",
                         )
 
-                        if extension == ".docx":
-                            emitir_aviso(
-                                "El DOCX terminó de guardarse desde Word. "
-                                "Si el archivo se ve incompleto, el problema quedó acotado al postprocesado COM."
-                            )
                     finally:
                         documento.Close(False)
                 finally:
@@ -1104,58 +838,16 @@ class Generador:
 
             if extension == ".docx":
                 if not ruta_docx_intermedio_local or not os.path.exists(ruta_docx_intermedio_local):
-                    raise FileNotFoundError(
-                        "No se generó el DOCX intermedio local para el postprocesado."
-                    )
+                    raise FileNotFoundError("No se generó el DOCX intermedio local.")
 
-                emitir_aviso(
-                    "Word guardó el DOCX base correctamente. Ahora se aplicará footer y firma directamente sobre el archivo DOCX, sin una segunda pasada de Word COM."
+                shutil.copy2(ruta_docx_intermedio_local, os.path.abspath(ruta))
+                registrar_error_log(
+                    "Generador.guardar",
+                    f"DOCX final copiado a {os.path.abspath(ruta)!r}.",
+                    nivel="INFO",
                 )
-                postproceso_completo = True
-                try:
-                    registrar_error_log("Generador.guardar", "Iniciando postprocesado DOCX sin COM.", nivel="INFO")
-                    self._postprocesar_docx_sin_com(ruta_docx_intermedio_local)
-                    registrar_error_log("Generador.guardar", "Footer y firma insertados en el DOCX sin COM.", nivel="INFO")
-                except Exception as exc:
-                    postproceso_completo = False
-                    registrar_error_log(
-                        "Generador.guardar",
-                        "Fallo el postprocesado DOCX sin COM.",
-                        exc=exc,
-                        nivel="ERROR",
-                    )
-                    emitir_aviso(
-                        "No se pudo aplicar footer y firma directamente en el DOCX. Se conservará el DOCX base ya guardado. "
-                        f"Error técnico: {exc!r}."
-                    )
 
-                if postproceso_completo:
-                    try:
-                        shutil.copy2(ruta_docx_intermedio_local, os.path.abspath(ruta))
-                        registrar_error_log(
-                            "Generador.guardar",
-                            f"DOCX final copiado a {os.path.abspath(ruta)!r} desde la ruta local temporal.",
-                            nivel="INFO",
-                        )
-                    except Exception as exc:
-                        registrar_error_log(
-                            "Generador.guardar",
-                            "No se pudo copiar el DOCX final desde la ruta local temporal al destino.",
-                            exc=exc,
-                            nivel="ERROR",
-                        )
-                        emitir_aviso(
-                            "El DOCX se procesó en local, pero no pudo copiarse a la ruta final. Se conservará el DOCX base ya guardado. "
-                            f"Error técnico: {exc!r}."
-                        )
-                else:
-                    registrar_error_log(
-                        "Generador.guardar",
-                        "Se omite la copia final del DOCX postprocesado porque Word COM falló; se conserva el DOCX base ya guardado.",
-                        nivel="WARNING",
-                    )
-
-            if extension == ".pdf":
+            if extension == ".pdf" and incluir_firma_footer:
                 registrar_error_log("Generador.guardar", "Iniciando estampado de firma en PDF.", nivel="INFO")
                 self._estampar_firma_en_pdf(os.path.abspath(ruta))
                 registrar_error_log("Generador.guardar", "Firma estampada en PDF.", nivel="INFO")
@@ -1172,5 +864,8 @@ class Generador:
             if self.logo_temporal and os.path.exists(self.logo_temporal):
                 os.remove(self.logo_temporal)
                 self.logo_temporal = None
+            if self.logo_marca_agua_temporal and os.path.exists(self.logo_marca_agua_temporal):
+                os.remove(self.logo_marca_agua_temporal)
+                self.logo_marca_agua_temporal = None
             if extension == ".docx" and ruta_docx_intermedio_local and os.path.exists(ruta_docx_intermedio_local):
                 os.remove(ruta_docx_intermedio_local)

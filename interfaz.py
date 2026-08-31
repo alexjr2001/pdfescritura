@@ -784,7 +784,11 @@ class App:
             try:
                 os.makedirs(carpeta_destino, exist_ok=True)
                 ruta_salida = os.path.join(carpeta_destino, nombre_pdf)
-                g.guardar(ruta_salida, avisar=advertencias.append)
+                g.guardar(
+                    ruta_salida,
+                    avisar=advertencias.append,
+                    incluir_firma_footer=True,
+                )
                 if mostrar_mensaje and advertencias:
                     self._showwarning(
                         "Advertencias al generar el testimonio",
@@ -804,7 +808,11 @@ class App:
                     nivel="WARNING",
                 )
                 ruta_salida = nombre_pdf
-                g.guardar(ruta_salida, avisar=advertencias.append)
+                g.guardar(
+                    ruta_salida,
+                    avisar=advertencias.append,
+                    incluir_firma_footer=True,
+                )
                 if mostrar_mensaje and advertencias:
                     self._showwarning(
                         "Advertencias al generar el testimonio",
@@ -980,8 +988,11 @@ class App:
         )
 
         fecha_generacion = date.today().strftime("%Y-%m-%d")
-        carpeta_base = r"Z:\DOC BORIS VILCA\TESTIMONIOS Y PARTES"
-        carpeta_destino = os.path.join(carpeta_base, fecha_generacion)
+        carpeta_destino = (
+            r"Z:\01 TRABAJO 2026\TRANSFERENCIAS VEHICULARES"
+            if es_acta
+            else r"Z:\01 TRABAJO 2026\ESCRITURAS PUBLICAS"
+        )
         numero_documento = self.numero_documento.strip() or "SIN_NUMERO"
         tipo_nombre = "Acta" if es_acta else "Parte"
         nombre_parte = f"{tipo_nombre} {numero_documento}"
