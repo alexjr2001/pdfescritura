@@ -578,6 +578,26 @@ class App:
             "fill_char": "*",
         }
 
+    def _extraer_testado_despues_del_ancla(self, generador, ancla):
+        parrafos = list(generador.doc.paragraphs)
+        indice_ancla = next(
+            (
+                indice
+                for indice, parrafo in enumerate(parrafos)
+                if ancla in parrafo.text
+            ),
+            None,
+        )
+        if indice_ancla is None:
+            return None
+
+        for parrafo in parrafos[indice_ancla:]:
+            texto = re.sub(r"\s+", " ", parrafo.text).strip()
+            if texto.upper().startswith("TESTADO:"):
+                return texto
+
+        return None
+
     def _parsear_foja(self, valor):
         # Acepta formatos como: 123, 123V, 123 V, 123-V o 123.V.
         m = re.fullmatch(r"(\d+)(?:\s*[-\.]?\s*(V))?", valor.strip().upper())
@@ -715,20 +735,31 @@ class App:
             return None
 
         if es_acta:
-            texto = [
-                self._crear_linea_asteriscos(),
+            testado_reubicado = self._extraer_testado_despues_del_ancla(
+                g,
+                "EL PROCESO DE FIRMAS CONCLUYO",
+            )
+            contenido_acta = []
+            if testado_reubicado:
+                contenido_acta.append([(testado_reubicado, False)])
+            contenido_acta.extend(
                 [
-                    (
-                        f"LA PRESENTE ACTA SE EXTIENDE DE LA FOJA SERIE NUMERO {f1} A {f2}. "
-                        f"{texto_firmas}"
-                        f"CONCLUIDO EL PROCESO DE FIRMAS, SUSCRIBO EL PRESENTE INSTRUMENTO EL DIA {fecha_notario}, {self.notario}, NOTARIO DE AREQUIPA. "
-                        f"ES COPIA DE LA ACTA VEHICULAR QUE CORRE EN MI REGISTRO "
-                        f"CON FECHA {fecha_hoy}, A FOJAS {f1}-{f2} "
-                        "Y A SOLICITUD DE PARTE INTERESADA EXPIDO EL PRESENTE "
-                        "TESTIMONIO NOTARIAL ELECTRONICO, DE ACUERDO A LEY.",
-                        True,
-                    )
-                ],
+                    self._crear_linea_asteriscos(),
+                    [
+                        (
+                            f"{texto_firmas}"
+                            f"CONCLUIDO EL PROCESO DE FIRMAS, SUSCRIBO EL PRESENTE INSTRUMENTO EL DIA {fecha_notario}, {self.notario}, NOTARIO DE AREQUIPA. "
+                            f"ES COPIA DEL ACTA VEHICULAR QUE CORRE EN MI REGISTRO, "
+                            f"A FOJAS {f1}-{f2} "
+                            "Y A SOLICITUD DEL REQUIRIENTE EXPIDO EL PRESENTE "
+                            f"TESTIMONIO NOTARIAL ELECTRONICO, EN AREQUIPA CON FECHA {fecha_hoy}, DE ACUERDO A LEY.",
+                            True,
+                        )
+                    ],
+                ]
+            )
+            texto = [
+                *contenido_acta,
             ]
         else:
             texto = [
@@ -752,7 +783,7 @@ class App:
                         f"CONCLUIDO EL PROCESO DE FIRMAS, SUSCRIBO EL PRESENTE INSTRUMENTO EL DIA {fecha_notario}, {self.notario}, NOTARIO DE AREQUIPA. "
                         f"ES COPIA DE LA ESCRITURA PUBLICA QUE CORRE EN MI REGISTRO "
                         f"CON FECHA {fecha_hoy}, A FOJAS {f1}-{f2} "
-                        "Y A SOLICITUD DE PARTE INTERESADA EXPIDO EL PRESENTE "
+                        "Y A SOLICITUD DEL REQUIRIENTE EXPIDO EL PRESENTE "
                         "TESTIMONIO NOTARIAL ELECTRONICO, DE ACUERDO A LEY.",
                         True,
                     )
@@ -760,7 +791,7 @@ class App:
             ]
 
         anclas_reemplazo = (
-            ["LA PRESENTE ACTA SE EXTIENDE", "EL PROCESO DE FIRMAS CONCLUYO", "FE DE CONTENIDO Y LECTURA"]
+            ["EL PROCESO DE FIRMAS CONCLUYO", "FE DE CONTENIDO Y LECTURA"]
             if es_acta else
             ["FE DE CONTENIDO Y LECTURA"]
         )
@@ -953,18 +984,29 @@ class App:
 
         # Párrafo final
         fecha_hoy = fecha_a_texto_notarial(date.today()).upper()
-        texto_final = f"DOY FE QUE ESTA TRANSCRIPCIÓN CONCUERDA CON EL INSTRUMENTO PÚBLICO MATRIZ QUE OBRA EN MI REGISTRO, EL QUE SE ENCUENTRA SUSCRITO POR LOS OTORGANTES Y AUTORIZADA POR MÍ. SE EXPIDE ESTE PARTE NOTARIAL EN FORMATO DIGITAL, EN AREQUIPA A LOS {fecha_hoy}."
+        texto_final = f"DOY FE QUE ESTA TRANSCRIPCIÓN CONCUERDA CON EL INSTRUMENTO PÚBLICO MATRIZ QUE OBRA EN MI REGISTRO, A FOJAS {f1}-{f2}, EL QUE SE ENCUENTRA SUSCRITO POR LOS OTORGANTES Y AUTORIZADA POR MÍ. SE EXPIDE ESTE PARTE NOTARIAL EN FORMATO DIGITAL, EN AREQUIPA A LOS {fecha_hoy}."
 
         if es_acta:
-            texto = [
-                linea_asteriscos,
+            testado_reubicado = self._extraer_testado_despues_del_ancla(
+                g,
+                "EL PROCESO DE FIRMAS CONCLUYO",
+            )
+            contenido_acta = []
+            if testado_reubicado:
+                contenido_acta.append([(testado_reubicado, False)])
+            contenido_acta.extend(
                 [
-                    (
-                        f"LA PRESENTE ACTA SE EXTIENDE DE LA FOJA SERIE NUMERO {f1} A {f2}. "
-                        f"{firmas_parte} {texto_final}",
-                        True,
-                    ),
-                ],
+                    linea_asteriscos,
+                    [
+                        (
+                            f"{firmas_parte} {texto_final}",
+                            True,
+                        ),
+                    ],
+                ]
+            )
+            texto = [
+                *contenido_acta,
             ]
         else:
             texto = [
@@ -975,7 +1017,7 @@ class App:
             ]
 
         anclas_reemplazo = (
-            ["LA PRESENTE ACTA SE EXTIENDE", "EL PROCESO DE FIRMAS CONCLUYO", "FE DE CONTENIDO Y LECTURA"]
+            ["EL PROCESO DE FIRMAS CONCLUYO", "FE DE CONTENIDO Y LECTURA"]
             if es_acta else
             ["FE DE CONTENIDO Y LECTURA"]
         )
@@ -989,9 +1031,9 @@ class App:
 
         fecha_generacion = date.today().strftime("%Y-%m-%d")
         carpeta_destino = (
-            r"Z:\01 TRABAJO 2026\TRANSFERENCIAS VEHICULARES"
+            r"Z:\02. TRABAJO 2026\TRANSFERENCIAS VEHICULARES"
             if es_acta
-            else r"Z:\01 TRABAJO 2026\ESCRITURAS PUBLICAS"
+            else r"Z:\02. TRABAJO 2026\ESCRITURAS PUBLICAS"
         )
         numero_documento = self.numero_documento.strip() or "SIN_NUMERO"
         tipo_nombre = "Acta" if es_acta else "Parte"
