@@ -598,6 +598,86 @@ class App:
 
         return None
 
+    @staticmethod
+    def _extraer_bloque_fe_formateado(generador):
+        parrafos = list(generador.doc.paragraphs)
+        indice_inicio = next(
+            (
+                indice
+                for indice, parrafo in enumerate(parrafos)
+                if "FE DE CONTENIDO Y LECTURA" in parrafo.text.upper()
+            ),
+            None,
+        )
+        if indice_inicio is None:
+            return None
+
+        bloque = []
+        for parrafo in parrafos[indice_inicio:]:
+            if "EL PROCESO DE FIRMAS CONCLUYO" in parrafo.text.upper():
+                break
+
+            texto = parrafo.text.strip()
+            if not texto:
+                continue
+
+            texto_upper = texto.upper()
+            if "FE DE CONTENIDO Y LECTURA" in texto_upper:
+                primer_doy_fe = texto_upper.find("DOY FE")
+                segundo_doy_fe = (
+                    texto_upper.find("DOY FE", primer_doy_fe + len("DOY FE"))
+                    if primer_doy_fe != -1
+                    else -1
+                )
+                limite = segundo_doy_fe + len("DOY FE") if segundo_doy_fe != -1 else len(texto)
+                while limite < len(texto) and texto[limite] in ".:;":
+                    limite += 1
+                texto = texto[:limite].rstrip()
+
+                runs = []
+                posicion = 0
+                for run in parrafo.runs:
+                    texto_run = run.text
+                    if not texto_run:
+                        continue
+                    restante = limite - posicion
+                    if restante <= 0:
+                        break
+                    texto_run = texto_run[:restante]
+                    if texto_run:
+                        runs.append((texto_run, bool(run.bold)))
+                    posicion += len(texto_run)
+
+                encabezado = "FE DE CONTENIDO Y LECTURA"
+                if runs and encabezado in "".join(run_texto for run_texto, _ in runs).upper():
+                    texto_runs = []
+                    restante_encabezado = len(encabezado)
+                    for run_texto, es_negrita in runs:
+                        if restante_encabezado > 0:
+                            cantidad = min(restante_encabezado, len(run_texto))
+                            texto_runs.append((run_texto[:cantidad], True))
+                            if cantidad < len(run_texto):
+                                texto_runs.append((run_texto[cantidad:], es_negrita))
+                            restante_encabezado -= cantidad
+                        else:
+                            texto_runs.append((run_texto, es_negrita))
+                    runs = texto_runs
+
+                bloque.append(runs or [(texto, False)])
+                continue
+
+            if texto_upper.startswith("TESTADO:"):
+                bloque.append([(texto, False)])
+
+        return bloque or None
+
+    @staticmethod
+    def _extraer_bloque_fe_y_testado(generador):
+        bloque = App._extraer_bloque_fe_formateado(generador)
+        if not bloque:
+            return None
+        return " ".join(texto for parrafo in bloque for texto, _ in parrafo).strip()
+
     def _parsear_foja(self, valor):
         # Acepta formatos como: 123, 123V, 123 V, 123-V o 123.V.
         m = re.fullmatch(r"(\d+)(?:\s*[-\.]?\s*(V))?", valor.strip().upper())
@@ -762,21 +842,25 @@ class App:
                 *contenido_acta,
             ]
         else:
-            texto = [
-                [
-                    (
-                        "FE DE CONTENIDO Y LECTURA:",
-                        True,
-                    ),
-                    (
-                        " INSTRUIDOS LOS OTORGANTES DEL CONTENIDO DEL PRESENTE "
-                        "INSTRUMENTO POR LA LECTURA QUE LES HIZO EL NOTARIO, SE "
-                        "RATIFICAN EN SU CONTENIDO, PROCEDIENDO A FIRMAR JUNTO "
-                        "CONMIGO, DE LO QUE DOY FE.=============================="
-                        "============================================================",
-                        False,
-                    )
-                ],
+            bloque_fe_original = self._extraer_bloque_fe_formateado(g)
+            contenido_escritura = []
+            if bloque_fe_original:
+                contenido_escritura.extend(bloque_fe_original)
+            else:
+                contenido_escritura.append(
+                    [
+                        ("FE DE CONTENIDO Y LECTURA:", True),
+                        (
+                            " INSTRUIDOS LOS OTORGANTES DEL CONTENIDO DEL PRESENTE "
+                            "INSTRUMENTO POR LA LECTURA QUE LES HIZO EL NOTARIO, SE "
+                            "RATIFICAN EN SU CONTENIDO, PROCEDIENDO A FIRMAR JUNTO "
+                            "CONMIGO, DE LO QUE DOY FE.",
+                            False,
+                        ),
+                    ]
+                )
+            contenido_escritura.append(self._crear_linea_asteriscos())
+            contenido_escritura.append(
                 [
                     (
                         f"{texto_firmas}"
@@ -784,11 +868,12 @@ class App:
                         f"ES COPIA DE LA ESCRITURA PUBLICA QUE CORRE EN MI REGISTRO "
                         f"CON FECHA {fecha_hoy}, A FOJAS {f1}-{f2} "
                         "Y A SOLICITUD DEL REQUIRIENTE EXPIDO EL PRESENTE "
-                        "TESTIMONIO NOTARIAL ELECTRONICO, DE ACUERDO A LEY.",
+                        f"TESTIMONIO NOTARIAL ELECTRONICO, DE ACUERDO A LEY.",
                         True,
                     )
-                ],
-            ]
+                ]
+            )
+            texto = contenido_escritura
 
         anclas_reemplazo = (
             ["EL PROCESO DE FIRMAS CONCLUYO", "FE DE CONTENIDO Y LECTURA"]
@@ -942,23 +1027,7 @@ class App:
             return None
 
         # Construir texto para PARTE
-        texto_fe_titulo = "FE DE CONTENIDO Y LECTURA:"
-        texto_fe_base = (
-            " INSTRUIDOS LOS OTORGANTES DEL CONTENIDO DEL PRESENTE "
-            "INSTRUMENTO POR LA LECTURA QUE LES HIZO EL NOTARIO, SE "
-            "RATIFICAN EN SU CONTENIDO, PROCEDIENDO A FIRMAR JUNTO "
-            "CONMIGO, DE LO QUE DOY FE.=========================================================================================="
-        )
-        texto_fe_cuerpo = (
-            texto_fe_base
-        )
-
-        # Párrafo de fojas
-        texto_fojas_base = (
-            f"LA PRESENTE {'ACTA' if es_acta else 'ESCRITURA'} SE INICIA EN LA FOJA SERIE B Nª {f1} "
-            f"TERMINA EN LA FOJA SERIE {f2}. DOY FE."
-        )
-        texto_fojas = texto_fojas_base
+        bloque_fe_original = self._extraer_bloque_fe_formateado(g)
 
         # Línea de asteriscos independiente, antes del párrafo principal.
         linea_asteriscos = self._crear_linea_asteriscos()
@@ -1009,12 +1078,25 @@ class App:
                 *contenido_acta,
             ]
         else:
-            texto = [
-                [(texto_fe_titulo, True), (texto_fe_cuerpo, False)],
-                [(texto_fojas, False)],
-                linea_asteriscos,
-                [(firmas_parte + " " + texto_final, True)],
-            ]
+            contenido_escritura = []
+            if bloque_fe_original:
+                contenido_escritura.extend(bloque_fe_original)
+            else:
+                contenido_escritura.append(
+                    [
+                        ("FE DE CONTENIDO Y LECTURA:", True),
+                        (
+                            " INSTRUIDOS LOS OTORGANTES DEL CONTENIDO DEL PRESENTE "
+                            "INSTRUMENTO POR LA LECTURA QUE LES HIZO EL NOTARIO, SE "
+                            "RATIFICAN EN SU CONTENIDO, PROCEDIENDO A FIRMAR JUNTO "
+                            "CONMIGO, DE LO QUE DOY FE.",
+                            False,
+                        ),
+                    ]
+                )
+            contenido_escritura.append(linea_asteriscos)
+            contenido_escritura.append([(firmas_parte + " " + texto_final, True)])
+            texto = contenido_escritura
 
         anclas_reemplazo = (
             ["EL PROCESO DE FIRMAS CONCLUYO", "FE DE CONTENIDO Y LECTURA"]

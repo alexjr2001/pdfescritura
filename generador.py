@@ -49,8 +49,7 @@ class Generador:
         "Se emite el presente testimonio de conformidad con lo regulado por los artículos 24° y 28° del Decreto "
         "Legislativo N° 1049 - Decreto Legislativo del Notariado, en concordancia con lo regulado por la ley de "
         "firmas y certificados digitales y su reglamento aprobado por Decreto Supremo N° 052-2008-PCM. "
-        "Este documento notarial en formato digital contiene el traslado de la Escritura Pública, cuya verificación "
-        "se encuentra disponible por medio del código QR del link de verificación indicado."
+        "Este documento notarial en formato digital contiene el traslado de la Escritura Pública."
     )
 
     def __init__(self, ruta):
@@ -662,7 +661,14 @@ class Generador:
         parrafo.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         parrafo.paragraph_format.line_spacing = 1.5
 
-        if isinstance(contenido, (list, tuple)):
+        if isinstance(contenido, dict):
+            runs = contenido.get("runs", [])
+            for texto, es_negrita in runs:
+                run = parrafo.add_run(texto)
+                run.font.name = "Calibri"
+                run.font.size = Pt(9)
+                run.bold = es_negrita
+        elif isinstance(contenido, (list, tuple)):
             for texto, es_negrita in contenido:
                 run = parrafo.add_run(texto)
                 run.font.name = "Calibri"
