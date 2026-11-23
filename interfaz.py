@@ -34,6 +34,7 @@ class App:
         self.notario = ""
         self.numero_documento = ""
         self.boton_generar = None
+        self.boton_agregar_firmante = None
         self.loader_frame = None
         self.loader_bar = None
         self.loader_label = None
@@ -96,8 +97,9 @@ class App:
 
         ctk.CTkOptionMenu(
             tipo_frame,
-            values=["ESCRITURA", "ACTA VEHICULAR"],
+            values=["ESCRITURA", "ACTA VEHICULAR", "ACLARATORIA"],
             variable=self.tipo_documento_var,
+            command=self._cambiar_tipo_documento,
             width=180,
         ).pack(side="left", padx=(10, 0))
 
@@ -138,12 +140,13 @@ class App:
         acciones_frame = ctk.CTkFrame(self.root, fg_color="transparent")
         acciones_frame.pack(fill="x", padx=24, pady=(0, 12))
 
-        ctk.CTkButton(
+        self.boton_agregar_firmante = ctk.CTkButton(
             acciones_frame,
             text="Agregar firmante",
             height=36,
             command=self.agregar_firmante,
-        ).pack(side="left")
+        )
+        self.boton_agregar_firmante.pack(side="left")
 
     def _set_generando(self, generando, texto="Generando documentos..."):
         if generando:
@@ -241,7 +244,11 @@ class App:
     def cargar_personas(self, archivo):
         doc = Escritura(archivo)
 
-        if self.tipo_documento_var.get() == "ACTA VEHICULAR":
+        if self.tipo_documento_var.get() == "ACLARATORIA":
+            self.personas = []
+            self.firmantes = []
+            self.numero_documento = ""
+        elif self.tipo_documento_var.get() == "ACTA VEHICULAR":
             self.personas = doc.extraer_firmantes_acta()
             self.numero_documento = doc.extraer_numero_acta()
         else:
@@ -257,6 +264,22 @@ class App:
         ]
         self._renderizar_firmantes()
 
+    def _cambiar_tipo_documento(self, tipo_documento):
+        if self.ruta.get():
+            self.cargar_personas(self.ruta.get())
+        else:
+            self.personas = []
+            self.firmantes = []
+            self._renderizar_firmantes()
+
+        if self.boton_generar is not None:
+            texto = (
+                "Generar aclaratoria"
+                if tipo_documento == "ACLARATORIA"
+                else "Generar testimonio y parte"
+            )
+            self.boton_generar.configure(text=texto)
+
     def _renderizar_firmantes(self):
 
         for widget in self.frame_personas.winfo_children():
@@ -266,7 +289,12 @@ class App:
         self.fecha_texto_vars.clear()
         self.personas = [firmante["nombre"] for firmante in self.firmantes]
 
-        for indice, firmante in enumerate(self.firmantes):
+        firmantes_a_mostrar = (
+            []
+            if self.tipo_documento_var.get() == "ACLARATORIA"
+            else self.firmantes
+        )
+        for indice, firmante in enumerate(firmantes_a_mostrar):
             puede_subir = indice > 0
             puede_bajar = indice < (len(self.firmantes) - 1)
 
@@ -361,6 +389,12 @@ class App:
             self.fecha_widgets.append(cal)
             self.fecha_texto_vars.append(texto_fecha_var)
 
+        if self.boton_agregar_firmante is not None:
+            if self.tipo_documento_var.get() == "ACLARATORIA":
+                self.boton_agregar_firmante.pack_forget()
+            else:
+                self.boton_agregar_firmante.pack(side="left")
+
         # ── Sección inferior: Notario + Fojas + Botón ─────────────
         bottom = ctk.CTkFrame(self.frame_personas, corner_radius=10)
         bottom.pack(fill="x", padx=8, pady=12)
@@ -435,7 +469,11 @@ class App:
 
         self.boton_generar = ctk.CTkButton(
             botones_frame,
-            text="Generar testimonio y parte",
+            text=(
+                "Generar aclaratoria"
+                if self.tipo_documento_var.get() == "ACLARATORIA"
+                else "Generar testimonio y parte"
+            ),
             height=42,
             font=ctk.CTkFont(size=13, weight="bold"),
             command=self.generar_testimonio_y_parte,
@@ -693,6 +731,19 @@ class App:
         self._set_generando(True)
         self._actualizar_loader(0.12, "Preparando documento fuente...")
 
+        if self.tipo_documento_var.get() == "ACLARATORIA":
+            try:
+                ruta_aclaratoria = self.generar_aclaratoria()
+            finally:
+                self._set_generando(False)
+
+            if ruta_aclaratoria:
+                self._showinfo(
+                    "Éxito",
+                    f"Aclaratoria generada correctamente en:\n{ruta_aclaratoria}",
+                )
+            return
+
         ruta_fuente, temporal_a_eliminar, pagina_eliminada = Generador.preparar_fuente_sin_primera_pagina_blanca(self.ruta.get())
 
         try:
@@ -726,6 +777,69 @@ class App:
             f"- Parte PDF: {ruta_pdf_parte}"
             f"{aviso_pagina}"
         )
+
+    def generar_aclaratoria(self):
+        if not self.ruta.get():
+            self._showerror("Error", "Seleccione un documento.")
+            return None
+
+        fecha_notario = self.fecha_notario.get_date()
+        if not validar_fechas_no_futuras(fecha_notario, []):
+            self._showerror(
+                "Error",
+                "No se pueden generar documentos con fechas futuras. Corrija la fecha del Notario.",
+            )
+            return None
+
+        f1 = self.foja1.get().strip().upper()
+        f2 = self.foja2.get().strip().upper()
+        if not f1 or not f2:
+            self._showerror("Error", "Ingrese fojas inicial y final.")
+            return None
+
+        foja_inicial = self._parsear_foja(f1)
+        foja_final = self._parsear_foja(f2)
+        if foja_inicial is None or foja_final is None:
+            self._showerror(
+                "Error",
+                "Formato de foja invalido. Use numero y opcional V "
+                "(ejemplo: 438, 438V, 438-V o 438.V).",
+            )
+            return None
+
+        if foja_inicial > foja_final:
+            self._showerror(
+                "Error",
+                "La foja inicial debe ser menor o igual que la foja final.",
+            )
+            return None
+
+        ruta_fuente, temporal_a_eliminar, _ = Generador.preparar_fuente_sin_primera_pagina_blanca(
+            self.ruta.get()
+        )
+        try:
+            generador = Generador(ruta_fuente)
+            generador.agregar_texto_aclaratoria(
+                f1,
+                f2,
+                fecha_a_texto_interfaz(fecha_notario),
+            )
+            ruta_salida = (
+                f"{os.path.splitext(os.path.abspath(self.ruta.get()))[0]} "
+                "ACLARATORIA.docx"
+            )
+            generador.guardar(ruta_salida)
+            return ruta_salida
+        except Exception as exc:
+            self._mostrar_error_y_loguear(
+                "interfaz.generar_aclaratoria",
+                "La generación de la aclaratoria falló antes de completar el guardado.",
+                exc=exc,
+            )
+            return None
+        finally:
+            if temporal_a_eliminar and os.path.exists(temporal_a_eliminar):
+                os.remove(temporal_a_eliminar)
 
     def generar(self, mostrar_mensaje=True, ruta_fuente=None):
 
@@ -1115,7 +1229,7 @@ class App:
         carpeta_destino = (
             r"Z:\02. TRABAJO 2026\TRANSFERENCIAS VEHICULARES"
             if es_acta
-            else r"Z:\02. TRABAJO 2026\ESCRITURAS PUBLICAS"
+            else r"Z:\02. TRABAJO 2026\ESCRITURAS PUBLICAS\PARTES GENERADOS"
         )
         numero_documento = self.numero_documento.strip() or "SIN_NUMERO"
         tipo_nombre = "Acta" if es_acta else "Parte"

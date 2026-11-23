@@ -773,6 +773,39 @@ class Generador:
         self._centrar_bloque_por_margenes()
         self._asegurar_margen_inferior_minimo()
 
+    def agregar_texto_aclaratoria(self, foja_inicial, foja_final, fecha):
+        textos = [
+            (
+                "LA PRESENTE ACTA SE EXTIENDE DE LA FOJA SERIE NUMERO "
+                f"{foja_inicial} A {foja_final}"
+            ),
+            "",
+            "FIRMA DE: BORIS ANTONIO VILCA GUTIERREZ, NOTARIO DE AREQUIPA.",
+            (
+                "BORIS ANTONIO VILCA GUTIERREZ, ABOGADO, NOTARIO DE AREQUIPA, "
+                "DE CONFORMIDAD CON LO ESTABLECIDO EN EL ARTICULO 85° DE LA LEY "
+                "DEL NOTARIADO, EXPIDO ESTE PARTE NOTARIAL QUE CORRE EN MI "
+                "REGISTRO RESPECTIVO, LA MISMA QUE SE ENCUENTRA SUSCRITA POR LOS "
+                "COMPARECIENTES Y AUTORIZADA POR MI. DOY FE DE LA IDENTIDAD "
+                "INTEGRA DE ESTE PARTE NOTARIAL CON SU MATRIZ, EL QUE RUBRICO, "
+                "SELLO Y FIRMO CONFORME A LEY."
+            ),
+            f"AREQUIPA, {fecha}.",
+        ]
+
+        indices_con_lider = {0, 2, 3, len(textos) - 1}
+        parrafos = []
+        for indice, texto in enumerate(textos):
+            agregar_con_lider = indice in indices_con_lider
+            agregar_parrafo = (
+                self._agregar_parrafo_con_lider
+                if agregar_con_lider
+                else self._agregar_parrafo_formateado
+            )
+            parrafos.append(agregar_parrafo(texto, bold=True))
+
+        return parrafos
+
     def guardar(self, ruta, avisar=None, incluir_firma_footer=False):
         def emitir_aviso(mensaje):
             registrar_error_log("Generador.guardar", mensaje, nivel="WARNING")

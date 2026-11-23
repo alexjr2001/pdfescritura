@@ -90,3 +90,42 @@ def test_extrae_bloque_fe_original_hasta_segundo_doy_fe_y_testado(tmp_path):
     assert "DOY FE." in bloque
     assert bloque.count("DOY FE") >= 2
     assert "TESTADO: VAMO A CORREGIR TA VAINA" in bloque
+
+
+def test_agrega_texto_aclaratoria_al_final_con_fojas_y_fecha(tmp_path):
+    ruta_docx = tmp_path / "plantilla.docx"
+    doc = Document()
+    doc.add_paragraph("contenido fuente")
+    doc.save(ruta_docx)
+
+    generador = Generador(str(ruta_docx))
+    generador.agregar_texto_aclaratoria(
+        "6150905",
+        "6150906",
+        "20 DE NOVIEMBRE DEL 2026",
+    )
+    textos = [parrafo.text for parrafo in generador.doc.paragraphs]
+
+    assert textos[0] == "contenido fuente"
+    assert textos[1] == (
+        "LA PRESENTE ACTA SE EXTIENDE DE LA FOJA SERIE NUMERO 6150905 "
+        "A 6150906"
+    )
+    assert textos[2] == ""
+    assert textos[3] == (
+        "FIRMA DE: BORIS ANTONIO VILCA GUTIERREZ, NOTARIO DE AREQUIPA."
+    )
+    assert "EXPIDO ESTE PARTE NOTARIAL QUE CORRE EN MI REGISTRO" in textos[4]
+    assert "SELLO Y FIRMO CONFORME A LEY." in textos[4]
+    assert textos[5] == "AREQUIPA, 20 DE NOVIEMBRE DEL 2026."
+    assert generador._indices_pendientes_iguales == [
+        (1, "="),
+        (3, "="),
+        (4, "="),
+        (5, "="),
+    ]
+    assert all(
+        run.bold is True
+        for parrafo in generador.doc.paragraphs[1:]
+        for run in parrafo.runs
+    )
